@@ -1,0 +1,49 @@
+# ============================================================
+# RAG 药品问答系统 - 运行时依赖
+# 安装方式: pip install -r requirements.txt
+# ============================================================
+
+# ===== LangChain + LangGraph =====
+langchain>=0.3.0
+langchain-core>=0.3.0
+langchain-community>=0.3.0
+langgraph>=0.2.0
+
+# ===== 通义千问 SDK =====
+dashscope>=1.20.0
+
+# ===== 向量数据库 =====
+pymilvus>=2.4.0
+
+# ===== 数据库连接 =====
+pymysql>=1.1.0
+cryptography>=41.0.0
+redis>=5.0.0
+
+# ===== 向量 & 检索 =====
+rank-bm25>=0.2.2
+
+# ===== 文档处理 =====
+pypdf>=4.0.0
+python-docx>=1.1.0
+
+# ===== Web 框架 =====
+fastapi>=0.115.0
+uvicorn[standard]>=0.30.0
+python-multipart>=0.0.9
+
+# ===== 配置读取 =====
+pyyaml>=6.0
+python-dotenv>=1.0.0
+
+# ===== 工具库 =====
+tiktoken>=0.7.0
+tenacity>=8.2.0
+pydantic>=2.5.0
+pydantic-settings>=2.1.0
+
+# ===== 前端 =====
+streamlit>=1.28.0
+
+# ===== 日志 =====
+loguru>=0.7.0

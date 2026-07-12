@@ -1,0 +1,187 @@
+# ============================================================
+# RAG 药品问答系统 - Docker 编排文件
+# 使用方式: docker compose up -d
+# ============================================================
+# 服务说明:
+#   - etcd: Milvus 元数据存储（Milvus Standalone 内置依赖）
+#   - minio: Milvus 对象存储（Milvus Standalone 内置依赖）
+#   - milvus: Milvus 向量数据库（单机版）
+#   - mysql: MySQL 8.0 结构化数据库（存储原始文档/元数据/BM25全文索引）
+#   - redis: Redis 7（中期会话存储 + 缓存）
+# ============================================================
+
+# docker-compose 文件格式的版本号
+version: "3.8"
+
+services:
+  # ============================================================
+  # Milvus Standalone 全家桶（etcd + minio + milvus）
+  # 官方标准单机部署：https://milvus.io/docs/quickstart.md
+  # ============================================================
+
+  etcd:
+    container_name: milvus-etcd
+    image: quay.io/coreos/etcd:v3.5.5
+    environment:
+      - ETCD_AUTO_COMPACTION_MODE=revision
+      - ETCD_AUTO_COMPACTION_RETENTION=1000
+      - ETCD_QUOTA_BACKEND_BYTES=4294967296
+      - ETCD_SNAPSHOT_COUNT=50000
+    volumes:
+      - etcd_data:/etcd
+    command: etcd -advertise-client-urls=http://127.0.0.1:2379 -listen-client-urls http://0.0.0.0:2379 --data-dir /etcd
+    healthcheck:
+      test: ["CMD", "etcdctl", "endpoint", "health"]
+      interval: 30s
+      timeout: 20s
+      retries: 3
+    networks:
+      - rag-network
+
+  minio:
+    container_name: milvus-minio
+    image: minio/minio:RELEASE.2023-03-20T20-16-18Z
+    environment:
+      MINIO_ACCESS_KEY: minioadmin
+      MINIO_SECRET_KEY: minioadmin
+    volumes:
+      - minio_data:/minio_data
+    command: minio server /minio_data --console-address ":9001"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 30s
+      timeout: 20s
+      retries: 3
+    networks:
+      - rag-network
+
+  milvus:
+    container_name: milvus
+    image: milvusdb/milvus:v2.4.0
+    command: ["milvus", "run", "standalone"]
+    environment:
+      ETCD_ENDPOINTS: etcd:2379
+      MINIO_ADDRESS: minio:9000
+    volumes:
+      - milvus_data:/var/lib/milvus
+    ports:
+      - "19530:19530"    # Milvus gRPC 端口（应用连接用）
+      - "9091:9091"      # Milvus Web 控制台（http://localhost:9091 可查看状态）
+    depends_on:
+      etcd:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9091/healthz"]
+      interval: 30s
+      start_period: 90s
+      timeout: 20s
+      retries: 3
+    networks:
+      - rag-network
+
+  # ============================================================
+  # MySQL 8.0 - 结构化数据库
+  # 用途: 存储药品文档原始文本、元数据、BM25 全文索引
+  # ============================================================
+  mysql:
+    container_name: rag-mysql
+    image: mysql:8.0
+    environment:
+      MYSQL_ROOT_PASSWORD: ${MYSQL_PASSWORD}
+      MYSQL_DATABASE: ${MYSQL_DATABASE}
+    ports:
+      - "3307:3306"      # MySQL 容器端口（本地 3306 被占用，映射到 3307）
+    volumes:
+      # 初始化脚本目录（首次启动自动执行）
+      - ./scripts/mysql_init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+      # 数据持久化目录
+      - mysql_data:/var/lib/mysql
+    command:
+      # 启用全文索引（MySQL 8.0 默认开启，此处明确指定字符集）
+      - --character-set-server=utf8mb4
+      - --collation-server=utf8mb4_unicode_ci
+      - --default-authentication-plugin=mysql_native_password
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-uroot", "-p${MYSQL_PASSWORD}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - rag-network
+
+  # ============================================================
+  # Redis 7 - 缓存 & 会话存储
+  # 用途: 中期多轮会话上下文缓存、热点数据缓存
+  # ============================================================
+  redis:
+    container_name: rag-redis
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"      # Redis 默认端口
+    volumes:
+      - redis_data:/data
+    command: redis-server --appendonly yes
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - rag-network
+
+  # ============================================================
+  # RAG API - Python FastAPI 应用
+  # 用途: 对外提供 HTTP 问答接口
+  # ============================================================
+  rag-api:
+    container_name: rag-api
+    build:
+      context: .
+      dockerfile: Dockerfile
+    ports:
+      - "8000:8000"      # FastAPI 默认端口
+    env_file:
+      - .env
+    environment:
+      - MILVUS_HOST=milvus
+      - MYSQL_HOST=mysql
+      - MYSQL_PORT=3306
+      - REDIS_HOST=redis
+      - APP_ENV=production
+    volumes:
+      # 挂载日志目录，方便本地查看
+      - ./logs:/app/logs
+    depends_on:
+      milvus:
+        condition: service_healthy
+      mysql:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+    networks:
+      - rag-network
+
+# ============================================================
+# 网络
+# ============================================================
+networks:
+  rag-network:
+    driver: bridge
+
+# ============================================================
+# 数据卷（持久化存储）
+# ============================================================
+volumes:
+  milvus_data:
+    driver: local
+  etcd_data:
+    driver: local
+  minio_data:
+    driver: local
+  mysql_data:
+    driver: local
+  redis_data:
+    driver: local

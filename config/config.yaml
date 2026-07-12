@@ -1,0 +1,99 @@
+# ============================================================
+# RAG 药品问答系统 - 主配置文件
+# 所有业务参数、模型选择、数据库配置均集中在此文件
+# 注意：API Key 等敏感信息不要写在这里，写在 .env 中
+# ============================================================
+
+# ===== 模型配置 =====
+models:
+  # 文本切分参数
+  splitter:
+    chunk_size: 500          # 每块目标字符数
+    chunk_overlap: 50        # 块间重叠字符数（防止跨块信息丢失）
+    min_chunk_size: 100     # 最小块字符数（低于此值合并到上一块）
+    separator: "\n\n"        # 优先分割符（段落分隔）
+
+  # 嵌入模型（文本 → 向量）
+  embedding:
+    provider: "dashscope"    # 可选: dashscope / openai / local
+    model: "text-embedding-v4"
+    dimension: 1024          # Milvus 建索引维度（text-embedding-v4 支持 64/128/256/512/768/1024/1536/2048）
+    batch_size: 10           # 每批嵌入的文本块数量（DashScope API 限制 ≤10）
+
+  # 意图识别模型（判断用户问题是否在药品知识范围内）
+  intent:
+    provider: "dashscope"
+    model: "qwen-flash"      # 可选: qwen-flash / qwen3-max / qwen-plus / qwen-turbo
+    temperature: 0.1
+    max_tokens: 200
+
+  # 问答生成模型
+  chat:
+    provider: "dashscope"
+    model: "qwen3-max"
+    temperature: 0.3         # 适当随机性，避免过于机械
+    max_tokens: 2000          # 最大生成 token 数
+    top_p: 0.95
+    top_k: 50
+
+  # 重排序模型（对检索结果二次排序）
+  rerank:
+    provider: "dashscope"
+    model: "qwen3-rerank"    # 通义千问重排序模型（gte-rerank 已下线）
+
+# ===== 检索配置 =====
+retrieval:
+  # 向量检索
+  vector_top_k: 20           # Milvus 向量检索取 Top-K
+  # BM25 检索
+  bm25_top_k: 20             # MySQL 全文索引检索取 Top-K
+  # RRF 融合
+  rrf_k: 60                  # RRF 算法参数（通常 60）
+  rrf_top_n: 5               # RRF 融合后取 Top-N 送生成模型
+  # 关键词过滤
+  enable_keyword_filter: true  # 是否启用关键词过滤（商品名/通用名精确匹配）
+
+# ===== 数据库配置 =====
+database:
+  milvus:
+    collection_name: "drug_chunks"    # Collection 名称
+    dimension: 1024                   # 向量维度（必须与 embedding.dimension 一致）
+    index_type: "IVF_FLAT"           # 索引类型: IVF_FLAT / HNSW / DISKANN
+    metric_type: "IP"                # 相似度度量: IP(内积) / L2(欧氏距离) / COSINE
+    nlist: 1024                      # IVF 索引聚类数
+    nprobe: 16                       # 查询时探针数（精度与速度的权衡）
+    description: "药品说明书切分文本块向量库"
+
+  mysql:
+    database: "rag_pharma"
+    raw_docs_table: "drug_raw_docs"      # 原始文档表
+    chunks_table: "drug_chunks"           # 切分文本块表
+    metadata_table: "drug_metadata"      # 药品元数据表
+    index_records_table: "index_records"  # 索引批次记录表
+    # MySQL 连接池配置
+    pool_size: 5
+    pool_recycle: 3600                  # 连接回收时间（秒）
+
+# ===== Redis 配置 =====
+redis:
+  session_ttl: 3600            # 会话过期时间（秒，1小时）
+  max_history: 10               # 单会话最多保留多少轮对话
+  cache_ttl: 300                # 通用缓存过期时间（秒）
+
+# ===== 应用配置 =====
+app:
+  debug: false
+  cors_origins:
+    - "http://localhost:3000"
+    - "http://localhost:8000"
+  api_prefix: "/api/v1"
+  # 问答历史记录上限（防止上下文过长）
+  max_conversation_turns: 10
+
+# ===== 日志配置 =====
+logging:
+  level: "INFO"                 # DEBUG / INFO / WARNING / ERROR
+  format: "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+  file: "logs/app.log"
+  max_bytes: 10485760           # 单个日志文件最大 10MB
+  backup_count: 5              # 保留的日志文件数量
