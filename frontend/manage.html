@@ -1,0 +1,452 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="api-key" content="__API_KEY_PLACEHOLDER__">
+<title>知识库管理 — RAG Pharma</title>
+<style>
+/* ============================================================
+   CSS Variables — Botanical warm theme (shared with chat.html)
+   ============================================================ */
+:root {
+  --primary: #0d9488;
+  --primary-hover: #0f766e;
+  --primary-light: #f0fdfa;
+  --primary-100: #ccfbf1;
+  --bg: #fafaf9;
+  --card: #ffffff;
+  --border: #e7e5e4;
+  --text: #1c1917;
+  --text-secondary: #78716c;
+  --text-muted: #a8a29e;
+  --danger: #ef4444;
+  --success: #10b981;
+  --warning: #f59e0b;
+  --shadow: 0 1px 2px rgba(0,0,0,.04), 0 2px 8px rgba(0,0,0,.05);
+  --radius: 12px;
+}
+
+* { margin: 0; padding: 0; box-sizing: border-box; }
+
+body {
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC",
+    "Microsoft YaHei", "Helvetica Neue", sans-serif;
+  background: var(--bg);
+  color: var(--text);
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+}
+
+/* ============================================================
+   Header
+   ============================================================ */
+.header {
+  width: 100%; max-width: 640px;
+  padding: 20px 24px;
+  display: flex; align-items: center; justify-content: space-between;
+}
+.header-left { display: flex; align-items: center; gap: 10px; }
+.header-logo {
+  width: 36px; height: 36px; border-radius: 10px;
+  background: var(--primary); color: #fff;
+  display: flex; align-items: center; justify-content: center;
+  font-size: 20px;
+}
+.header-title { font-size: 16px; font-weight: 700; }
+.header-subtitle { font-size: 13px; color: var(--text-secondary); }
+
+.btn {
+  display: inline-flex; align-items: center; justify-content: center; gap: 5px;
+  padding: 8px 16px; border-radius: 8px; border: none; cursor: pointer;
+  font-size: 13px; font-weight: 500; transition: .15s; font-family: inherit;
+  text-decoration: none; white-space: nowrap;
+}
+.btn-ghost {
+  background: transparent; color: var(--text-secondary);
+  border: 1px solid var(--border);
+}
+.btn-ghost:hover { background: var(--primary-light); color: var(--primary); border-color: var(--primary); }
+.btn-primary { background: var(--primary); color: #fff; width: 100%; }
+.btn-primary:hover { background: var(--primary-hover); }
+.btn-primary:disabled { opacity: .5; cursor: not-allowed; }
+.btn-sm { font-size: 11px; padding: 5px 12px; }
+.btn-danger-sm {
+  font-size: 11px; padding: 3px 8px; border-radius: 6px;
+  border: 1px solid rgba(239,68,68,.2); background: transparent;
+  color: var(--danger); cursor: pointer; font-family: inherit;
+}
+.btn-danger-sm:hover { background: rgba(239,68,68,.08); }
+
+/* ============================================================
+   Main Content
+   ============================================================ */
+.main {
+  width: 100%; max-width: 640px;
+  padding: 0 24px 40px;
+  display: flex; flex-direction: column; gap: 20px;
+}
+
+/* Cards */
+.card {
+  background: var(--card); border: 1px solid var(--border);
+  border-radius: var(--radius); padding: 20px 24px;
+  box-shadow: var(--shadow);
+}
+.card-header {
+  display: flex; align-items: center; justify-content: space-between;
+  margin-bottom: 16px;
+}
+.card-title { font-size: 14px; font-weight: 600; display: flex; align-items: center; gap: 8px; }
+.card-subtitle { font-size: 12px; color: var(--text-muted); }
+
+/* Status */
+.status-row {
+  display: flex; gap: 12px; flex-wrap: wrap;
+}
+.status-item {
+  flex: 1; min-width: 100px;
+  display: flex; align-items: center; gap: 8px;
+  padding: 10px 14px; border-radius: 8px;
+  background: #fafaf9; border: 1px solid var(--border);
+}
+.status-dot { width: 10px; height: 10px; border-radius: 50%; flex-shrink: 0; }
+.status-dot.ok { background: var(--success); }
+.status-dot.err { background: var(--danger); }
+.status-label { font-size: 12px; color: var(--text-secondary); }
+.status-value { font-size: 13px; font-weight: 600; margin-left: auto; }
+
+/* Upload */
+.upload-zone {
+  border: 2px dashed var(--border); border-radius: 10px;
+  padding: 28px; text-align: center; cursor: pointer;
+  transition: .15s; margin-bottom: 14px;
+}
+.upload-zone:hover, .upload-zone.drag-over {
+  border-color: var(--primary);
+  background: var(--primary-light);
+}
+.upload-zone .icon { font-size: 32px; margin-bottom: 8px; }
+.upload-zone .title { font-size: 14px; font-weight: 500; margin-bottom: 4px; }
+.upload-zone .hint { font-size: 12px; color: var(--text-muted); }
+.upload-zone .file-name { font-size: 13px; color: var(--primary); margin-top: 6px; font-weight: 500; word-break: break-all; }
+input[type="file"] { display: none; }
+
+.form-group { margin-bottom: 12px; }
+.form-group label { display: block; font-size: 12px; color: var(--text-secondary); margin-bottom: 4px; font-weight: 500; }
+.form-group input {
+  width: 100%; padding: 9px 12px; border: 1px solid var(--border);
+  border-radius: 8px; font-size: 13px; font-family: inherit; outline: none;
+  transition: .15s;
+}
+.form-group input:focus { border-color: var(--primary); box-shadow: 0 0 0 3px rgba(13,148,136,.08); }
+.upload-status { font-size: 12px; margin-top: 8px; min-height: 18px; }
+
+/* Drug list */
+.drug-list { max-height: 400px; overflow-y: auto; }
+.drug-item {
+  display: flex; justify-content: space-between; align-items: center;
+  padding: 10px 12px; border-radius: 8px; transition: .1s;
+}
+.drug-item:hover { background: var(--primary-light); }
+.drug-item + .drug-item { border-top: 1px solid var(--border); }
+.drug-item .name { font-size: 13px; font-weight: 500; }
+.drug-item .meta { font-size: 11px; color: var(--text-muted); margin-top: 2px; }
+.drug-item .right { display: flex; align-items: center; gap: 10px; }
+.drug-count { font-size: 12px; color: var(--text-secondary); font-weight: 500; }
+
+.empty-hint { text-align: center; padding: 32px 20px; color: var(--text-muted); font-size: 13px; }
+
+/* ============================================================
+   Toasts
+   ============================================================ */
+.toast-container {
+  position: fixed; top: 20px; right: 20px; z-index: 9999;
+  display: flex; flex-direction: column; gap: 8px; pointer-events: none;
+}
+.toast {
+  padding: 12px 20px; border-radius: 8px; font-size: 13px; font-weight: 500;
+  color: #fff; box-shadow: 0 4px 12px rgba(0,0,0,.15);
+  animation: slideIn .3s ease; max-width: 380px; pointer-events: auto;
+}
+.toast.success { background: var(--success); }
+.toast.error { background: var(--danger); }
+.toast.info { background: var(--primary); }
+@keyframes slideIn { from { transform: translateX(100%); opacity: 0; } to { transform: translateX(0); opacity: 1; } }
+
+/* ============================================================
+   Responsive
+   ============================================================ */
+@media (max-width: 640px) {
+  .header { padding: 16px; }
+  .main { padding: 0 16px 32px; }
+  .card { padding: 16px; }
+}
+</style>
+</head>
+<body>
+
+<!-- ============================================================
+     Header
+     ============================================================ -->
+<header class="header">
+  <div class="header-left">
+    <a href="/" class="btn btn-ghost btn-sm" style="text-decoration:none">← 返回问答</a>
+  </div>
+  <div style="text-align:right">
+    <div class="header-title">⚙️ 知识库管理</div>
+    <div class="header-subtitle">上传药品说明书 · 管理已入库药品</div>
+  </div>
+</header>
+
+<!-- ============================================================
+     Main Content
+     ============================================================ -->
+<div class="main">
+
+  <!-- System Status -->
+  <div class="card">
+    <div class="card-header">
+      <span class="card-title">🔌 系统状态</span>
+      <button class="btn btn-ghost btn-sm" onclick="checkHealth()">刷新</button>
+    </div>
+    <div class="status-row">
+      <div class="status-item">
+        <span class="status-dot err" id="dotMilvus"></span>
+        <span class="status-label">Milvus</span>
+        <span class="status-value" id="valMilvus">检测中</span>
+      </div>
+      <div class="status-item">
+        <span class="status-dot err" id="dotMysql"></span>
+        <span class="status-label">MySQL</span>
+        <span class="status-value" id="valMysql">检测中</span>
+      </div>
+      <div class="status-item">
+        <span class="status-dot err" id="dotRedis"></span>
+        <span class="status-label">Redis</span>
+        <span class="status-value" id="valRedis">检测中</span>
+      </div>
+    </div>
+  </div>
+
+  <!-- Upload -->
+  <div class="card">
+    <div class="card-title" style="margin-bottom:16px">📄 上传药品说明书</div>
+    <div class="upload-zone" id="dropZone">
+      <div class="icon">📁</div>
+      <div class="title">点击选择文件或拖拽到此处</div>
+      <div class="hint">支持 PDF、DOCX、TXT 格式</div>
+      <div class="file-name" id="fileName"></div>
+    </div>
+    <input type="file" id="fileInput" accept=".pdf,.docx,.txt">
+    <div class="form-group">
+      <label>药品名称（选填）</label>
+      <input type="text" id="drugNameInput" placeholder="留空则从文件名自动推断...">
+    </div>
+    <div class="form-group">
+      <label style="display:flex;align-items:center;gap:6px;cursor:pointer;font-weight:400">
+        <input type="checkbox" id="desensitizeCheck"> 启用 LLM 脱敏处理
+      </label>
+    </div>
+    <button class="btn btn-primary" id="uploadBtn" onclick="uploadDocument()">
+      ⚡ 上传并入库
+    </button>
+    <div class="upload-status" id="uploadStatus"></div>
+  </div>
+
+  <!-- Drug List -->
+  <div class="card">
+    <div class="card-header">
+      <span class="card-title">📋 已入库药品 <span style="font-weight:400;color:var(--text-muted);font-size:12px" id="drugCount"></span></span>
+      <button class="btn btn-ghost btn-sm" onclick="refreshDrugs()">🔄 刷新</button>
+    </div>
+    <div class="drug-list" id="drugList">
+      <div class="empty-hint">加载中...</div>
+    </div>
+  </div>
+
+</div>
+
+<!-- Toast -->
+<div class="toast-container" id="toastContainer"></div>
+
+<script>
+// ============================================================
+// API Key auto-inject (shared with chat.html)
+// ============================================================
+const API_KEY = document.querySelector('meta[name="api-key"]')?.content || '';
+if (API_KEY) {
+  const _fetch = window.fetch;
+  window.fetch = function(url, options = {}) {
+    if (typeof url === 'string' && (url.startsWith('/api/') || url.includes('/api/'))) {
+      options = { ...options };
+      if (options.headers instanceof Headers) {
+        options.headers = new Headers(options.headers);
+        options.headers.set('X-API-Key', API_KEY);
+      } else {
+        options.headers = { ...(options.headers || {}), 'X-API-Key': API_KEY };
+      }
+    }
+    return _fetch.call(this, url, options);
+  };
+}
+
+const API = '/api/v1';
+
+// ============================================================
+// Init
+// ============================================================
+document.addEventListener('DOMContentLoaded', () => {
+  checkHealth();
+  refreshDrugs();
+  setupDragDrop();
+});
+
+// ============================================================
+// Health
+// ============================================================
+async function checkHealth() {
+  try {
+    const r = await fetch('/health/ready');
+    const d = await r.json();
+    setHealth('Milvus', d.checks?.milvus ?? false);
+    setHealth('Mysql', d.checks?.mysql ?? false);
+    setHealth('Redis', d.checks?.redis ?? false);
+  } catch {
+    setHealth('Milvus', false);
+    setHealth('Mysql', false);
+    setHealth('Redis', false);
+  }
+}
+function setHealth(name, ok) {
+  const dot = document.getElementById('dot' + name);
+  const val = document.getElementById('val' + name);
+  if (dot) dot.className = 'status-dot ' + (ok ? 'ok' : 'err');
+  if (val) val.textContent = ok ? '正常' : '未连接';
+}
+
+// ============================================================
+// Drag & Drop
+// ============================================================
+function setupDragDrop() {
+  const zone = document.getElementById('dropZone');
+  const input = document.getElementById('fileInput');
+  zone.addEventListener('click', () => input.click());
+  input.addEventListener('change', () => {
+    if (input.files.length) {
+      document.getElementById('fileName').textContent = '已选择: ' + input.files[0].name;
+    }
+  });
+  zone.addEventListener('dragover', e => { e.preventDefault(); zone.classList.add('drag-over'); });
+  zone.addEventListener('dragleave', () => zone.classList.remove('drag-over'));
+  zone.addEventListener('drop', e => {
+    e.preventDefault();
+    zone.classList.remove('drag-over');
+    if (e.dataTransfer.files.length) {
+      input.files = e.dataTransfer.files;
+      document.getElementById('fileName').textContent = '已选择: ' + e.dataTransfer.files[0].name;
+    }
+  });
+}
+
+// ============================================================
+// Upload
+// ============================================================
+async function uploadDocument() {
+  const fileInput = document.getElementById('fileInput');
+  const file = fileInput.files[0];
+  if (!file) { showToast('请先选择文件', 'error'); return; }
+
+  const btn = document.getElementById('uploadBtn');
+  const status = document.getElementById('uploadStatus');
+  btn.disabled = true;
+  btn.textContent = '⏳ 入库中...';
+  status.innerHTML = '<span style="color:#f59e0b">正在处理文档，请稍候...</span>';
+
+  const form = new FormData();
+  form.append('file', file);
+  const drugName = document.getElementById('drugNameInput').value.trim();
+  if (drugName) form.append('drug_name', drugName);
+  form.append('desensitize', document.getElementById('desensitizeCheck').checked);
+
+  try {
+    const r = await fetch(`${API}/knowledge/upload`, { method: 'POST', body: form });
+    const d = await r.json();
+    if (!r.ok) throw new Error(d.detail || '上传失败');
+    status.innerHTML = `<span style="color:#10b981">✅ 入库成功！${d.drug_name}: ${d.indexed_chunks}/${d.total_chunks} chunks 已索引</span>`;
+    showToast(`已入库: ${d.drug_name} (${d.indexed_chunks} chunks)`, 'success');
+    refreshDrugs();
+    checkHealth();
+    fileInput.value = '';
+    document.getElementById('fileName').textContent = '';
+    document.getElementById('drugNameInput').value = '';
+  } catch (e) {
+    status.innerHTML = `<span style="color:#ef4444">❌ ${e.message}</span>`;
+    showToast('入库失败: ' + e.message, 'error');
+  } finally {
+    btn.disabled = false;
+    btn.textContent = '⚡ 上传并入库';
+  }
+}
+
+// ============================================================
+// Drug List
+// ============================================================
+async function refreshDrugs() {
+  const container = document.getElementById('drugList');
+  const count = document.getElementById('drugCount');
+  try {
+    const r = await fetch(`${API}/knowledge/drugs`);
+    if (!r.ok) throw new Error('查询失败');
+    const d = await r.json();
+    count.textContent = d.drugs.length ? `(${d.drugs.length} 种药品)` : '';
+    if (!d.drugs.length) {
+      container.innerHTML = '<div class="empty-hint">暂无已入库药品，请上传药品说明书</div>';
+      return;
+    }
+    container.innerHTML = d.drugs.map(dr => `
+      <div class="drug-item">
+        <div>
+          <div class="name">${escHtml(dr.drug_name)}</div>
+          <div class="meta">${escHtml(dr.category || '未分类')} · ${dr.chunk_count} chunks</div>
+        </div>
+        <div class="right">
+          <span class="drug-count">${dr.chunk_count}</span>
+          <button class="btn-danger-sm" onclick="deleteDrug(${dr.id},'${escHtml(dr.drug_name)}')" title="删除">×</button>
+        </div>
+      </div>`).join('');
+  } catch {
+    container.innerHTML = '<div class="empty-hint" style="color:#ef4444">加载失败，请检查服务状态</div>';
+  }
+}
+
+async function deleteDrug(id, name) {
+  if (!confirm(`确定要删除 "${name}" 吗？\n将同时清除 MySQL 和 Milvus 中的所有相关数据。`)) return;
+  try {
+    const r = await fetch(`${API}/knowledge/drug/${id}`, { method: 'DELETE' });
+    if (!r.ok) throw new Error('删除失败');
+    showToast(`已删除: ${name}`, 'success');
+    refreshDrugs();
+  } catch (e) { showToast('删除失败: ' + e.message, 'error'); }
+}
+
+// ============================================================
+// Helpers
+// ============================================================
+function escHtml(s) {
+  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+
+function showToast(msg, type) {
+  const container = document.getElementById('toastContainer');
+  const el = document.createElement('div');
+  el.className = `toast ${type}`;
+  el.textContent = msg;
+  container.appendChild(el);
+  setTimeout(() => { el.style.opacity = '0'; el.style.transition = '.3s'; setTimeout(() => el.remove(), 300); }, 3500);
+}
+</script>
+</body>
+</html>

@@ -38,7 +38,7 @@ _INTENT_FEW_SHOT = _PROMPTS["intent"]["few_shot_examples"]
 class IntentResult:
     """意图识别结果"""
 
-    intent: str  # "drug_inquiry" | "chitchat" | "other"
+    intent: str  # "drug_inquiry" | "chitchat" | "general" | "attack"
     confidence: float  # 0.0 ~ 1.0
 
 
@@ -140,8 +140,8 @@ class IntentClassifier:
                 logger.info(f"快速预判 — 闲聊（匹配问候模式）")
                 return IntentResult(intent="chitchat", confidence=0.95)
 
-        # 明显的非药品问题关键词
-        non_drug_patterns = [
+        # 明显的非药品问题关键词 → general（正常回答，不是拒答）
+        general_patterns = [
             r"天气",
             r"股票",
             r"汇率",
@@ -150,16 +150,41 @@ class IntentClassifier:
             r"游戏",
             r"足球|篮球|比赛",
             r"旅游|攻略",
-            r"菜谱|做饭|怎么做",
-            r"编程|代码|python|java",
-            r"今天是几号|现在几点",
+            r"菜谱|做饭|怎么做.*吃",
+            r"编程|代码|python|java|写.*程序|写.*算法|写.*代码",
+            r"今天是几号|现在几点|几月几",
             r"翻译|translate",
+            r"你是谁|你是什么|你的名字",
+        ]
+        for pattern in general_patterns:
+            if re.search(pattern, query):
+                logger.info(f"快速预判 — 通用问题（匹配: {pattern}）")
+                return IntentResult(intent="general", confidence=0.90)
+
+        # 攻击检测 → attack（拒绝回答）
+        attack_patterns = [
+            r"ignore\s+(all\s+)?(previous|prior|above|your)\s+(instructions?|prompts?|rules?)",
+            r"忽略(\s+所有)?(之前|前面|上述|你的)?\s*(指令|指示|规则|提示)",
+            r"forget\s+(all\s+)?(your\s+)?(instructions?|prompts?|rules?)",
+            r"忘记(\s+所有)?(你的)?\s*(指令|指示|规则)",
+            r"show\s+(me\s+)?(your|the)\s+(system\s+)?(prompt|instructions?|rules?)",
+            r"(告诉|透露|显示|展示)(你的)?\s*(系统)?\s*(提示|指令|规则|prompt)",
+            r"\bDAN\b.*mode|\bDAN\b.*模式",
+            r"developer\s*mode|开发者\s*模式",
+            r"(你现在是|假装你是|pretend\s+you\s+(are|to\s+be)|act\s+as\s+(if|a))\s",
+            r"你不受.*限制|你没有任何.*限制|你可以.*做任何",
+            r"(必须|一定.*要).*回答|你不能拒绝|没有.*选择.*必须",
+            r"<\|im_start\|>|<\|im_end\|>",
+            r"system\s*:\s*(you\s*are|你的|指令)",
+            r"越狱|jail\s*break",
+            r"(制造|制作|合成).*(毒品|毒药|冰毒|武器|炸弹|炸药)",
+            r"(how\s+to\s+(make|build|create|manufacture).*(drugs?|bomb|weapon|poison))",
         ]
         query_lower = query.lower()
-        for pattern in non_drug_patterns:
-            if re.search(pattern, query):
-                logger.info(f"快速预判 — 非药品问题（匹配: {pattern}）")
-                return IntentResult(intent="other", confidence=0.95)
+        for pattern in attack_patterns:
+            if re.search(pattern, query_lower):
+                logger.info(f"快速预判 — 攻击（匹配: {pattern}）")
+                return IntentResult(intent="attack", confidence=0.98)
 
         # 明显的药品问题关键词
         drug_signals = [
@@ -240,7 +265,7 @@ class IntentClassifier:
             confidence = float(data.get("confidence", 0.5))
 
             # 校验
-            if intent not in ("drug_inquiry", "chitchat", "other"):
+            if intent not in ("drug_inquiry", "chitchat", "general", "attack"):
                 intent = "drug_inquiry"  # 兜底宽容
 
             # 钳制置信度到 [0, 1]

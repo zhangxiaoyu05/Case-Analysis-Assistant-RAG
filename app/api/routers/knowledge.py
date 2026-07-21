@@ -8,8 +8,6 @@ DELETE /api/v1/knowledge/drug/{id}      - 删除指定药品
 """
 
 import asyncio
-import os
-import shutil
 import uuid
 from pathlib import Path
 from typing import Optional
@@ -27,8 +25,9 @@ router = APIRouter()
 UPLOAD_DIR = PROJECT_ROOT / "data" / "uploads"
 UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
 
-# 批次状态内存缓存（简化版，生产环境应用 Redis/DB 存储）
-_batch_status: dict[str, dict] = {}
+# 批次文件名映射（batch_id → filename），仅用于状态查询接口补充显示
+# 核心状态数据存储在 MySQL index_records 表中
+_batch_filenames: dict[str, str] = {}
 
 
 # ============================================================
@@ -92,6 +91,7 @@ async def upload_document(
     file: UploadFile = File(..., description="药品说明书文件"),
     drug_name: Optional[str] = Form(None, description="药品名称（不填则从文件名推断）"),
     desensitize: bool = Form(False, description="是否启用 LLM 脱敏"),
+    overwrite: bool = Form(False, description="当药品已存在时是否覆盖旧数据"),
 ) -> UploadResponse:
     # 1. 校验文件类型
     filename = file.filename or "unknown"
@@ -116,54 +116,74 @@ async def upload_document(
         logger.error(f"[{batch_id}] 文件保存失败: {e}")
         raise HTTPException(status_code=500, detail=f"文件保存失败: {e}")
 
-    # 3. 运行离线流程（同步阻塞 → asyncio.to_thread）
-    _batch_status[batch_id] = {
-        "status": "running",
-        "filename": filename,
-        "drug_name": drug_name or "推断中...",
-        "total_chunks": 0,
-        "indexed_chunks": 0,
-        "error": None,
-    }
+    # 3. 提前检查药品是否已存在（快速失败，避免走完整 pipeline 才发现冲突）
+    if not overwrite and drug_name:
+        try:
+            import pymysql
+            cfg_params = _cfg.get_mysql_connection()
+            conn = pymysql.connect(**cfg_params)
+            cursor = conn.cursor()
+            cursor.execute("SELECT COUNT(*) AS cnt FROM drug_raw_docs WHERE drug_name = %s", (drug_name,))
+            row = cursor.fetchone()
+            conn.close()
+            if row and row[0] > 0:
+                raise HTTPException(
+                    status_code=409,
+                    detail=f"药品 '{drug_name}' 已存在于知识库中。如需覆盖，请设置 overwrite=true",
+                )
+        except HTTPException:
+            raise
+        except Exception:
+            pass  # MySQL 不可用时跳过预检，让 pipeline 自己处理
 
+    # 4. 记录文件名（供状态查询使用）
+    _batch_filenames[batch_id] = filename
+
+    # 5. 运行离线流程（同步阻塞 → asyncio.to_thread）
     try:
         result = await asyncio.to_thread(
             run_pipeline,
             file_path=str(save_path),
             drug_name=drug_name,
             desensitize=desensitize,
+            overwrite=overwrite,
         )
 
         # 提取结果（PipelineResult 是 dataclass，非 dict）
-        chunks_count = result.total_chunks
-        embedded_count = result.indexed_chunks
         inferred_name = result.drug_name or drug_name or "未知"
 
-        _batch_status[batch_id].update({
-            "status": "completed",
-            "drug_name": inferred_name,
-            "total_chunks": chunks_count,
-            "indexed_chunks": embedded_count,
-        })
+        # 处理 skipped 状态（药品已存在且未覆盖）
+        if result.status == "skipped":
+            logger.info(f"[{batch_id}] 药品已存在，跳过: {inferred_name}")
+            return UploadResponse(
+                batch_id=batch_id,
+                filename=filename,
+                drug_name=inferred_name,
+                total_chunks=0,
+                indexed_chunks=0,
+                status="skipped",
+                message=result.error_message or "药品已存在，未覆盖",
+            )
 
         logger.info(
             f"[{batch_id}] 入库完成: drug={inferred_name}, "
-            f"chunks={chunks_count}, indexed={embedded_count}"
+            f"chunks={result.total_chunks}, indexed={result.indexed_chunks}"
         )
 
         return UploadResponse(
             batch_id=batch_id,
             filename=filename,
             drug_name=inferred_name,
-            total_chunks=chunks_count,
-            indexed_chunks=embedded_count,
-            status="completed",
-            message="知识库构建完成",
+            total_chunks=result.total_chunks,
+            indexed_chunks=result.indexed_chunks,
+            status=result.status,
+            message="知识库构建完成" if result.status == "completed" else (
+                result.error_message or "部分完成"
+            ),
         )
 
     except Exception as e:
         logger.error(f"[{batch_id}] 入库失败: {e}")
-        _batch_status[batch_id].update({"status": "failed", "error": str(e)})
         raise HTTPException(status_code=500, detail=f"知识库构建失败: {e}")
 
 
@@ -177,17 +197,42 @@ async def upload_document(
     description="根据 batch_id 查询离线入库的进度和结果。",
 )
 async def get_batch_status(batch_id: str) -> BatchStatus:
-    info = _batch_status.get(batch_id)
-    if not info:
+    # 从 MySQL index_records 表读取批次状态（持久化，重启不丢失）
+    try:
+        from app.db.mysql_client import MySQLClient
+        mysql = MySQLClient()
+        mysql.connect()
+        record = mysql.get_index_record(batch_id)
+        mysql.disconnect()
+    except Exception as e:
+        logger.error(f"查询批次状态失败: {e}")
+        raise HTTPException(status_code=503, detail=f"数据库查询失败: {e}")
+
+    if not record:
+        # 回退：可能在 MySQL 写入前就被查询
+        filename = _batch_filenames.get(batch_id, "")
+        if filename:
+            return BatchStatus(
+                batch_id=batch_id,
+                status="running",
+                filename=filename,
+                drug_name="",
+                total_chunks=0,
+                indexed_chunks=0,
+                error=None,
+            )
         raise HTTPException(status_code=404, detail=f"批次 {batch_id} 不存在")
+
+    filename = _batch_filenames.get(batch_id, "")
+
     return BatchStatus(
         batch_id=batch_id,
-        status=info["status"],
-        filename=info["filename"],
-        drug_name=info["drug_name"],
-        total_chunks=info["total_chunks"],
-        indexed_chunks=info["indexed_chunks"],
-        error=info.get("error"),
+        status=record.get("index_status", "unknown"),
+        filename=filename,
+        drug_name=record.get("drug_name", ""),
+        total_chunks=record.get("total_chunks", 0) or 0,
+        indexed_chunks=record.get("indexed_chunks", 0) or 0,
+        error=record.get("error_message"),
     )
 
 
@@ -202,36 +247,38 @@ async def get_batch_status(batch_id: str) -> BatchStatus:
 )
 async def list_drugs() -> DrugListResponse:
     try:
-        import pymysql
-        cfg_params = _cfg.get_mysql_connection()
-        conn = pymysql.connect(**cfg_params)
-        cursor = conn.cursor()
+        from app.db.mysql_client import MySQLClient
+        mysql = MySQLClient()
+        mysql.connect()
 
-        # 查询药品及 chunk 统计
-        cursor.execute("""
+        # 查询药品及 chunk 统计（复用 MySQLClient 内部连接）
+        sql = """
             SELECT
                 r.id,
                 r.drug_name,
-                r.drug_manufacturer,
-                r.drug_category,
+                r.drug_manufacturer AS manufacturer,
+                r.drug_category AS category,
                 COUNT(c.id) AS chunk_count,
                 r.created_at
             FROM drug_raw_docs r
             LEFT JOIN drug_chunks c ON c.doc_id = r.id
             GROUP BY r.id, r.drug_name, r.drug_manufacturer, r.drug_category, r.created_at
             ORDER BY r.created_at DESC
-        """)
-        rows = cursor.fetchall()
-        conn.close()
+        """
+        with mysql.conn.cursor() as cursor:
+            cursor.execute(sql)
+            rows = cursor.fetchall()
+
+        mysql.disconnect()
 
         drugs = [
             DrugListItem(
-                id=row[0],
-                drug_name=row[1],
-                manufacturer=row[2],
-                category=row[3],
-                chunk_count=row[4],
-                created_at=str(row[5]) if row[5] else "",
+                id=row["id"],
+                drug_name=row["drug_name"],
+                manufacturer=row.get("manufacturer"),
+                category=row.get("category"),
+                chunk_count=row.get("chunk_count", 0),
+                created_at=str(row["created_at"]) if row.get("created_at") else "",
             )
             for row in rows
         ]
@@ -254,42 +301,30 @@ async def list_drugs() -> DrugListResponse:
 )
 async def delete_drug(drug_id: int) -> DeleteResponse:
     try:
-        import pymysql
-        cfg_params = _cfg.get_mysql_connection()
-        conn = pymysql.connect(**cfg_params)
-        cursor = conn.cursor()
+        from app.db.milvus_client import MilvusClient
+        from app.db.mysql_client import MySQLClient
+
+        mysql = MySQLClient()
+        mysql.connect()
 
         # 先查药品名（用于返回 + Milvus 删除）
-        cursor.execute("SELECT drug_name FROM drug_raw_docs WHERE id = %s", (drug_id,))
-        row = cursor.fetchone()
-        if not row:
-            conn.close()
+        raw_doc = mysql.get_raw_doc(drug_id)
+        if not raw_doc:
+            mysql.disconnect()
             raise HTTPException(status_code=404, detail=f"药品 ID {drug_id} 不存在")
 
-        drug_name = row[0]
+        drug_name = raw_doc["drug_name"]
 
-        # MySQL: 删除 chunks（CASCADE 会级联删，但显式删更安全）
-        cursor.execute("DELETE FROM drug_chunks WHERE doc_id = %s", (drug_id,))
-        # MySQL: 删除 raw_doc
-        cursor.execute("DELETE FROM drug_raw_docs WHERE id = %s", (drug_id,))
-        # MySQL: 删除 metadata
-        cursor.execute("DELETE FROM drug_metadata WHERE drug_name = %s", (drug_name,))
-        conn.commit()
-        conn.close()
+        # MySQL: 使用封装好的方法删除全部关联数据
+        mysql.delete_drug_by_name(drug_name)
+        mysql.disconnect()
 
-        # Milvus: 删除向量（try，可能 Collection 不存在）
+        # Milvus: 按 drug_name 删除向量
         try:
-            from app.db.milvus_client import MilvusClient
-
             milvus = MilvusClient()
             milvus.connect()
-            # 按 doc_id 过滤删除
-            milvus.client.delete(
-                collection_name=milvus.collection_name,
-                filter=f"doc_id == {drug_id}",
-            )
+            milvus.delete_by_drug_name(drug_name)
             milvus.disconnect()
-            logger.info(f"Milvus 中药品 '{drug_name}' (doc_id={drug_id}) 的向量已删除")
         except Exception as e:
             logger.warning(f"Milvus 删除失败（可能 Collection 为空）: {e}")
 

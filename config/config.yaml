@@ -74,11 +74,35 @@ database:
     pool_size: 5
     pool_recycle: 3600                  # 连接回收时间（秒）
 
+# ===== 短期记忆配置 =====
+memory:
+  summarize_model: "qwen-flash"  # 摘要模型（快速、便宜）
+  recent_turns: 4                # 保留最近 N 轮完整对话（超出部分压缩为摘要）
+  summary_max_tokens: 600        # 摘要最大生成 token 数
+  max_summary_chars: 800         # 摘要最大存储字符数
+  enabled: true                  # 是否启用对话摘要
+
 # ===== Redis 配置 =====
 redis:
   session_ttl: 3600            # 会话过期时间（秒，1小时）
-  max_history: 10               # 单会话最多保留多少轮对话
+  max_history: 20               # 单会话最多保留多少轮对话（摘要模式下可设大一些）
   cache_ttl: 300                # 通用缓存过期时间（秒）
+
+# ===== 安全配置 =====
+security:
+  # API Key 鉴权
+  auth:
+    enabled: true             # 是否启用 API Key 鉴权（设为 false 则完全跳过）
+  # 速率限制（基于 IP 的滑动窗口算法）
+  rate_limit:
+    enabled: true             # 是否启用速率限制
+    requests_per_minute: 60   # 每分钟单 IP 最大请求数
+  # HTTP 安全响应头
+  headers:
+    x_content_type_options: "nosniff"
+    x_frame_options: "DENY"
+    x_xss_protection: "1; mode=block"
+    referrer_policy: "strict-origin-when-cross-origin"
 
 # ===== 应用配置 =====
 app:

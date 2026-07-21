@@ -141,6 +141,7 @@ def generate_node(state: RagState) -> dict:
     query = state.get("query", "")
     ranked_docs = state.get("ranked_docs", [])
     history = state.get("history")
+    memory_summary = state.get("memory_summary", "")
 
     if not ranked_docs:
         logger.warning("无参考文档，生成兜底回答")
@@ -162,6 +163,7 @@ def generate_node(state: RagState) -> dict:
             query=query,
             context_docs=ranked_docs,
             history=history,
+            memory_summary=memory_summary,
         )
         logger.info(
             f"答案生成完成: len={len(result.answer)}, template={result.template_used}"
@@ -252,22 +254,67 @@ def chitchat_node(state: RagState) -> dict:
 
 
 # ============================================================
-# 拒绝节点（非药品问题）
+# 通用问答节点（非药品问题，但不涉及攻击）
 # ============================================================
-def reject_node(state: RagState) -> dict:
+def general_node(state: RagState) -> dict:
     """
-    对于非药品相关问题，返回礼貌拒绝信息。
+    对非药品但正常的问题，直接使用 LLM 回答（不走检索），
+    并在回答中说明这并非专长领域。
 
     Returns:
-        {"answer": str, "sources": []}
+        {"answer": str, "sources": [], "template_used": "general"}
     """
-    logger.info(f"非药品问题: {state.get('query', '')[:60]}")
+    query = state.get("query", "").strip()
+    memory_summary = state.get("memory_summary", "")
+    history = state.get("history")
+    logger.info(f"通用问答: {query[:60]}")
+
+    try:
+        generator = Generator()
+        result: GeneratedAnswer = generator.generate(
+            query=query,
+            context_docs=[],  # 不传检索结果
+            template="general",
+            history=history,
+            memory_summary=memory_summary,
+        )
+        return {
+            "answer": result.answer,
+            "sources": [],
+            "template_used": "general",
+        }
+    except Exception as e:
+        logger.error(f"通用问答生成失败: {e}")
+        return {
+            "answer": (
+                f"关于「{query[:50]}」...\n\n"
+                "我主要擅长药品知识问答，这个问题不是我的专长领域。"
+                "建议你通过其他专业渠道获取更准确的信息。"
+            ),
+            "sources": [],
+            "template_used": "general",
+            "error": f"生成失败: {e}",
+            "error_node": "general",
+        }
+
+
+# ============================================================
+# 攻击拒绝节点（提示词注入、越狱等）
+# ============================================================
+def attack_node(state: RagState) -> dict:
+    """
+    检测到提示词注入攻击或越狱尝试时，返回统一的安全拒绝消息。
+    不透露具体检测细节（安全考量）。
+
+    Returns:
+        {"answer": str, "sources": [], "template_used": "attack"}
+    """
+    logger.warning(f"检测到攻击: {state.get('query', '')[:80]}")
     return {
         "answer": (
-            "抱歉，这个问题超出了药品知识范围，我无法给出专业回答。\n\n"
-            "我是药品知识问答助手，擅长回答药品适应症、用法用量、禁忌、不良反应、药物相互作用等问题。\n\n"
-            "您可以换个药品相关的问题试试，我很乐意帮助您！"
+            "抱歉，您的请求包含不安全的输入，无法处理。\n\n"
+            "如果您有药品相关的正常问题，请重新表述后提问。"
         ),
         "sources": [],
-        "template_used": "reject",
+        "template_used": "attack",
     }

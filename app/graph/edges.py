@@ -13,7 +13,8 @@ def route_after_intent(state: RagState) -> str:
 
     - drug_inquiry → 走正常检索流程
     - chitchat → 闲聊回应（不走检索）
-    - other → 拒绝回答
+    - general → 通用问答（不走检索，LLM 直接回答）
+    - attack → 拒绝回答（安全提示）
     - 意图节点出错 → 降级到检索流程（出兜底回答）
     """
     if state.get("error_node") == "intent":
@@ -23,8 +24,10 @@ def route_after_intent(state: RagState) -> str:
     intent = state.get("intent", "")
     if intent == "chitchat":
         return "chitchat"
-    if intent == "other":
-        return "reject"
+    if intent == "general":
+        return "general"
+    if intent == "attack":
+        return "attack"
     return "retrieve"
 
 

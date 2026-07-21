@@ -8,7 +8,8 @@ LangGraph RAG 流程图构建
     START → intent → [条件路由]
       ├─ "drug_inquiry" → retrieve → rank → generate → END
       ├─ "chitchat" → chitchat → END（问候/闲聊，不走检索）
-      ├─ "other" → reject → END
+      ├─ "general" → general → END（非药品正常问题，LLM 直接回答）
+      ├─ "attack" → attack → END（提示词注入/越狱，安全拒绝）
       └─ intent 出错 → retrieve（降级继续）
 """
 
@@ -19,11 +20,12 @@ from loguru import logger
 
 from app.graph.edges import route_after_intent, route_after_retrieve
 from app.graph.nodes import (
+    attack_node,
     chitchat_node,
+    general_node,
     generate_node,
     intent_node,
     rank_node,
-    reject_node,
     retrieve_node,
 )
 from app.graph.state import RagState
@@ -46,20 +48,22 @@ def build_graph() -> StateGraph:
     builder.add_node("rank", rank_node)
     builder.add_node("generate", generate_node)
     builder.add_node("chitchat", chitchat_node)
-    builder.add_node("reject", reject_node)
+    builder.add_node("general", general_node)
+    builder.add_node("attack", attack_node)
 
     # ---- 边 ----
     # 入口
     builder.add_edge(START, "intent")
 
-    # 意图路由: drug_inquiry → retrieve, chitchat → chitchat, other → reject
+    # 意图路由: drug_inquiry → retrieve, chitchat → chitchat, general → general, attack → attack
     builder.add_conditional_edges(
         "intent",
         route_after_intent,
         {
             "retrieve": "retrieve",
             "chitchat": "chitchat",
-            "reject": "reject",
+            "general": "general",
+            "attack": "attack",
         },
     )
 
@@ -78,7 +82,8 @@ def build_graph() -> StateGraph:
     # 终点
     builder.add_edge("generate", END)
     builder.add_edge("chitchat", END)
-    builder.add_edge("reject", END)
+    builder.add_edge("general", END)
+    builder.add_edge("attack", END)
 
     compiled = builder.compile()
     logger.info("LangGraph RAG 流程构建完成")

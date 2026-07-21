@@ -32,6 +32,7 @@ from app.schemas.chat import (
     SourceDoc,
 )
 from app.schemas.common import ErrorResponse
+from app.services.memory_manager import MemoryManager
 
 router = APIRouter()
 
@@ -75,18 +76,33 @@ async def chat(request: ChatRequest) -> ChatResponse:
     session_id = request.session_id or uuid.uuid4().hex[:16]
     t_start = time.perf_counter()
 
-    # 1. 加载对话历史
+    # 1. 加载对话历史与记忆摘要
     history_manager = get_history_manager()
     history = await history_manager.get_history(session_id)
     history_for_llm = _build_history_for_llm(history)
 
-    logger.info(f"[{session_id}] 单轮问答: {request.message[:60]}... (历史={len(history_for_llm)} 条)")
+    # 2. 短期记忆压缩（摘要旧轮次，保留最近轮次完整）
+    memory_manager = MemoryManager()
+    existing_summary = await history_manager.get_summary(session_id)
+    memory_summary, recent_history = await memory_manager.summarize(
+        history_for_llm, existing_summary
+    )
+    # 更新摘要到 Redis（异步保存，不影响本次响应）
+    if memory_summary != existing_summary:
+        await history_manager.set_summary(session_id, memory_summary)
 
-    # 2. 执行 LangGraph RAG 流程（同步图在 asyncio.to_thread 中运行）
+    logger.info(
+        f"[{session_id}] 单轮问答: {request.message[:60]}... "
+        f"(历史={len(history_for_llm)} 条, 摘要={len(memory_summary)} 字, "
+        f"最近={len(recent_history)} 条)"
+    )
+
+    # 3. 执行 LangGraph RAG 流程（同步图在 asyncio.to_thread 中运行）
     graph = get_graph()
     initial_state: RagState = {
         "query": request.message,
-        "history": history_for_llm,
+        "history": recent_history,
+        "memory_summary": memory_summary,
     }
 
     try:
@@ -105,11 +121,11 @@ async def chat(request: ChatRequest) -> ChatResponse:
             error_node="graph",
         )
 
-    # 3. 构建响应
+    # 4. 构建响应
     elapsed_ms = (time.perf_counter() - t_start) * 1000
     sources = _search_dicts_to_source_docs(result_state.get("sources", []))
 
-    # 4. 保存本轮对话到 Redis
+    # 5. 保存本轮对话到 Redis
     try:
         await history_manager.add_turn(
             session_id=session_id,
@@ -150,11 +166,23 @@ async def chat_stream(request: ChatRequest):
     session_id = request.session_id or uuid.uuid4().hex[:16]
     history_manager = get_history_manager()
 
-    # 预加载历史
+    # 预加载历史与记忆摘要
     history = await history_manager.get_history(session_id)
     history_for_llm = _build_history_for_llm(history)
 
-    logger.info(f"[{session_id}] 流式问答: {request.message[:60]}...")
+    # 短期记忆压缩
+    memory_manager = MemoryManager()
+    existing_summary = await history_manager.get_summary(session_id)
+    memory_summary, recent_history = await memory_manager.summarize(
+        history_for_llm, existing_summary
+    )
+    if memory_summary != existing_summary:
+        await history_manager.set_summary(session_id, memory_summary)
+
+    logger.info(
+        f"[{session_id}] 流式问答: {request.message[:60]}... "
+        f"(摘要={len(memory_summary)} 字, 最近={len(recent_history)} 条)"
+    )
 
     async def event_generator():
         """SSE 事件生成器。每个事件格式: event: <type>\ndata: <json>\n\n"""
@@ -176,14 +204,28 @@ async def chat_stream(request: ChatRequest):
                 full_answer = chitchat_msg
                 return
 
-            if intent_result.intent == "other":
-                reject_msg = (
-                    "抱歉，这个问题超出了药品知识范围。"
-                    "我是药品知识问答助手，擅长回答药品适应症、用法用量、禁忌等问题，换个药品相关的问题试试吧！"
-                )
-                yield f"event: token\ndata: {json.dumps({'event': 'token', 'data': reject_msg}, ensure_ascii=False)}\n\n"
+            if intent_result.intent == "attack":
+                # 攻击：返回统一安全拒绝消息，不透露检测细节
+                attack_msg = "抱歉，您的请求包含不安全的输入，无法处理。如果您有药品相关的正常问题，请重新表述后提问。"
+                yield f"event: token\ndata: {json.dumps({'event': 'token', 'data': attack_msg}, ensure_ascii=False)}\n\n"
                 yield f"data: {json.dumps({'event': 'done', 'data': ''})}\n\n"
-                full_answer = reject_msg
+                full_answer = attack_msg
+                return
+
+            if intent_result.intent == "general":
+                # 通用问题：LLM 直接回答（不走 RAG 检索），末尾附加非专长声明
+                generator = Generator()
+                full_answer = ""
+                for token in generator.generate_stream(
+                    query=request.message,
+                    context_docs=[],  # 不传检索结果
+                    history=recent_history,
+                    template="general",
+                    memory_summary=memory_summary,
+                ):
+                    full_answer += token
+                    yield f"data: {json.dumps({'event': 'token', 'data': token}, ensure_ascii=False)}\n\n"
+                yield f"data: {json.dumps({'event': 'done', 'data': ''})}\n\n"
                 return
 
             # ---- 阶段 2: 混合检索 ----
@@ -222,7 +264,8 @@ async def chat_stream(request: ChatRequest):
                 for token in generator.generate_stream(
                     query=request.message,
                     context_docs=ranked_dicts,
-                    history=history_for_llm,
+                    history=recent_history,
+                    memory_summary=memory_summary,
                 ):
                     full_answer += token
                     yield f"data: {json.dumps({'event': 'token', 'data': token}, ensure_ascii=False)}\n\n"

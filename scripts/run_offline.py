@@ -83,6 +83,7 @@ def cmd_process_file(
     manufacturer: str | None = None,
     category: str | None = None,
     desensitize: bool = False,
+    overwrite: bool = False,
     batch_id: str | None = None,
 ) -> None:
     """处理单个文件"""
@@ -92,6 +93,7 @@ def cmd_process_file(
         drug_manufacturer=manufacturer,
         drug_category=category,
         desensitize=desensitize,
+        overwrite=overwrite,
         batch_id=batch_id,
     )
 
@@ -126,6 +128,7 @@ def cmd_process_dir(
     manufacturer: str | None = None,
     category: str | None = None,
     desensitize: bool = False,
+    overwrite: bool = False,
 ) -> None:
     """处理目录中所有文档"""
     results = run_pipeline_batch(
@@ -134,6 +137,7 @@ def cmd_process_dir(
         drug_manufacturer=manufacturer,
         drug_category=category,
         desensitize=desensitize,
+        overwrite=overwrite,
     )
 
     # 汇总
@@ -156,6 +160,7 @@ def main() -> None:
   python scripts/run_offline.py --file doc.pdf --dry-run
   python scripts/run_offline.py --dir data/raw/
   python scripts/run_offline.py --file doc.pdf --desensitize
+  python scripts/run_offline.py --file doc.pdf --overwrite
         """,
     )
 
@@ -197,6 +202,11 @@ def main() -> None:
         help="启用 LLM 脱敏处理（会消耗 API 额度）",
     )
     parser.add_argument(
+        "--overwrite",
+        action="store_true",
+        help="当药品已存在时覆盖旧数据（默认跳过）",
+    )
+    parser.add_argument(
         "--batch-id",
         type=str,
         default=None,
@@ -228,6 +238,7 @@ def main() -> None:
                 manufacturer=args.manufacturer,
                 category=args.category,
                 desensitize=args.desensitize,
+                overwrite=args.overwrite,
                 batch_id=args.batch_id,
             )
     elif args.dir:
@@ -241,6 +252,7 @@ def main() -> None:
                 manufacturer=args.manufacturer,
                 category=args.category,
                 desensitize=args.desensitize,
+                overwrite=args.overwrite,
             )
 
 

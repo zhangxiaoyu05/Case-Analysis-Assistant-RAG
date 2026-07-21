@@ -19,7 +19,8 @@
 │           LangGraph 流程编排（app/graph/）              │
 │   START → intent → retrieve → rank → generate → END  │
 │            ├─ chitchat → END（闲聊直达）               │
-│            └─ reject → END（非药品问题拒绝）            │
+│            ├─ general → END（非药品问题 LLM 直接回答）   │
+│            └─ attack → END（攻击/越狱安全拒绝）         │
 └─────────────────────┬────────────────────────────────┘
                       │
 ┌─────────────────────▼────────────────────────────────┐
@@ -49,17 +50,26 @@
 
 | 模块 | 功能 |
 |------|------|
-| 意图识别 | qwen-flash，快速预判 + LLM 精确分类（drug_inquiry / chitchat / other） |
+| 意图识别 | qwen-flash，快速预判 + LLM 精确分类（drug_inquiry / chitchat / general / attack）四层防御 |
 | 混合检索 | Milvus 向量检索 + MySQL BM25 全文检索 → RRF 融合 |
 | 重排序 | qwen3-rerank，对检索结果二次排序，失败自动回退到原始排序 |
-| 答案生成 | qwen3-max，支持 3 种场景模板（默认问答 / 药品对比 / 用法用量追问） |
+| 答案生成 | qwen3-max，支持 4 种场景模板（默认问答 / 药品对比 / 用法用量追问 / 通用问答） |
+| 短期记忆 | qwen-flash 滑动窗口 + 累积摘要，旧对话压缩为摘要注入 Prompt，最大化上下文利用率 |
 | 流式输出 | SSE（Server-Sent Events），逐 token 实时返回 |
 
 ### 会话与知识库管理
 
-- Redis 多轮对话历史（自动 TTL 过期 + 轮数裁剪）
+- Redis 多轮对话历史（自动 TTL 过期 + 轮数裁剪）+ 记忆摘要持久化
+- 短期记忆：滑动窗口 + qwen-flash 累积摘要，旧对话压缩注入 Prompt
 - 知识库药品 CRUD（上传入库 / 列表查询 / 删除）
 - 健康检查（Milvus / MySQL / Redis 连接状态）
+
+### 安全防护
+
+- 四层防御架构：输入检测 → 提示词加固 → 路由隔离 → 输出过滤
+- API Key 鉴权 + 基于 IP 的速率限制
+- HTTP 安全响应头（X-Content-Type-Options / X-Frame-Options / XSS Protection）
+- 攻击检测：提示词注入 / 越狱 / 间接注入 / 语义诱导
 
 ## 🚀 快速开始
 
@@ -143,9 +153,11 @@ docker compose up -d
 ├── app/
 │   ├── api/                    # FastAPI 接口层
 │   │   ├── main.py             # 应用入口 + lifespan 生命周期
+│   │   ├── auth.py             # API Key 鉴权模块
+│   │   ├── middleware.py        # 速率限制 + 安全响应头中间件
 │   │   ├── dependencies.py     # 依赖注入（单例获取）
 │   │   └── routers/            # 路由模块
-│   │       ├── chat.py         # 问答接口（单轮 + 流式 + 历史管理）
+│   │       ├── chat.py         # 问答接口（单轮 + 流式 + 短期记忆集成）
 │   │       ├── health.py       # 健康检查 / 就绪检查
 │   │       └── knowledge.py    # 知识库管理（上传 / 查询 / 删除）
 │   ├── config.py               # 统一配置层（.env + config.yaml 合并）
@@ -158,9 +170,11 @@ docker compose up -d
 │   │   ├── edges.py            # 条件路由（意图路由 / 检索后路由）
 │   │   └── graph.py            # 图构建 + 编译（模块级单例）
 │   ├── offline/                # 离线入库流程
+│   │   ├── __init__.py          # Pipeline 接口
 │   │   ├── loader.py           # 文档加载器（PDF / DOCX / TXT）
 │   │   ├── cleaner.py          # 文本清洗器（规范化 + 可选脱敏）
 │   │   ├── splitter.py         # 章节感知切分器
+│   │   ├── multi_drug_splitter.py  # 多药品合集文件拆分器
 │   │   ├── embedder.py         # 向量化器（DashScope TextEmbedding）
 │   │   └── pipeline.py         # 流程编排器（运行完整入库流水线）
 │   ├── online/                 # 在线问答流程
@@ -172,7 +186,8 @@ docker compose up -d
 │   │   ├── chat.py             # 问答请求 / 响应 / 历史模型
 │   │   └── common.py           # 通用模型（健康检查 / 错误响应）
 │   └── services/               # 业务服务层
-│       └── history_manager.py  # Redis 异步会话历史管理
+│       ├── history_manager.py  # Redis 异步会话历史管理 + 记忆摘要存储
+│       └── memory_manager.py   # 短期记忆管理器（滑动窗口 + qwen-flash 累积摘要）
 ├── config/
 │   ├── config.yaml             # 业务参数（模型 / 检索 / 数据库 / 日志）
 │   └── prompts.yaml            # 提示词模板（意图 / 生成 / 脱敏 / 质量评估）
@@ -180,20 +195,24 @@ docker compose up -d
 │   ├── raw/                    # 20 种药品说明书原始文件
 │   └── uploads/                # Web 上传文件暂存目录
 ├── frontend/
-│   ├── index.html              # 原生 HTML/CSS/JS Web 前端
-│   └── streamlit_app.py        # Streamlit 前端
+│   ├── chat.html               # 原生 Web 问答界面
+│   ├── manage.html             # 知识库管理界面
+│   └── streamlit_app.py        # Streamlit 前端（含短期记忆支持）
 ├── scripts/
 │   ├── init_collection.py      # 一键初始化所有存储层
 │   ├── init_milvus.py          # Milvus Collection 创建 + 索引构建
 │   ├── mysql_init.sql          # MySQL 建库建表脚本（Docker 自动执行）
 │   ├── run_offline.py          # 离线入库 CLI 工具
 │   └── split_drug_file.py      # 药品合集文件拆分工具
-├── tests/                      # 单元测试（offline / online / graph / api）
+├── tasks/                      # 开发任务规划文档
+│   └── triple_memory_plan.md   # 三段记忆体系分步实施计划
+├── tests/                      # 单元测试（288 tests）
 │   ├── conftest.py             # 共享 fixtures + mocks
 │   ├── test_offline/           # 离线流程测试
 │   ├── test_online/            # 在线流程测试
 │   ├── test_graph/             # LangGraph 图测试
-│   └── test_api/               # API 接口测试
+│   ├── test_api/               # API 接口测试
+│   └── test_services/          # 业务服务测试（含记忆管理）
 ├── docker-compose.yml          # Docker 服务编排（6 个容器）
 ├── Dockerfile                  # API 服务容器镜像
 ├── pyproject.toml              # 项目元数据 + 工具配置
@@ -208,9 +227,10 @@ docker compose up -d
 | 环节 | 模型 | 说明 |
 |------|------|------|
 | 嵌入 | `text-embedding-v4` | 文本转向量，1024 维 |
-| 意图识别 | `qwen-flash` | 轻量模型，快速分类 |
+| 意图识别 | `qwen-flash` | 轻量模型，四分类（drug_inquiry/chitchat/general/attack） |
 | 重排序 | `qwen3-rerank` | 检索结果二次排序 |
 | 答案生成 | `qwen3-max` | 高质量生成回答 |
+| 短期记忆 | `qwen-flash` | 对话摘要压缩 |
 
 ## 📡 API 接口
 

@@ -17,9 +17,10 @@ class RagState(TypedDict, total=False):
     # ---- 输入 ----
     query: str
     history: list[dict]  # [{"role": "user"/"assistant", "content": "..."}]
+    memory_summary: str  # 早期对话的累积摘要（由 MemoryManager 生成）
 
     # ---- 意图分类 ----
-    intent: str  # "drug_inquiry" | "chitchat" | "other"
+    intent: str  # "drug_inquiry" | "chitchat" | "general" | "attack"
     intent_confidence: float  # 0.0 ~ 1.0
 
     # ---- 混合检索 ----

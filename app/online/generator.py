@@ -112,6 +112,7 @@ class Generator:
         context_docs: list[dict],
         history: list[dict] | None = None,
         template: str | None = None,
+        memory_summary: str = "",
     ) -> GeneratedAnswer:
         """
         生成药品知识回答。
@@ -126,6 +127,7 @@ class Generator:
             history: 对话历史 [{"role": "user/assistant", "content": "..."}]
             template: 指定提示词模板（"default" / "comparison" / "dosage_followup"）
                       不传则自动检测
+            memory_summary: 早期对话的累积摘要（由 MemoryManager 生成）
 
         Returns:
             GeneratedAnswer — answer 为生成的回答文本
@@ -148,7 +150,9 @@ class Generator:
 
         # 构建 system + user messages
         system_prompt = self._get_system_prompt(template)
-        user_prompt = self._get_user_prompt(template, context_text, query, history)
+        user_prompt = self._get_user_prompt(
+            template, context_text, query, history, memory_summary
+        )
 
         logger.info(
             f"[{request_id}] 开始生成回答: query={query[:60]}..., "
@@ -256,6 +260,7 @@ class Generator:
             "default": "default",
             "comparison": "comparison",
             "dosage_followup": "dosage_followup",
+            "general": "general",
         }
         key = template_map.get(template, "default")
         prompt_config = _CHAT_PROMPTS.get(key, _CHAT_PROMPTS["default"])
@@ -267,32 +272,40 @@ class Generator:
         context: str,
         query: str,
         history: list[dict] | None = None,
+        memory_summary: str = "",
     ) -> str:
         """获取指定模板的 user prompt（填充变量）"""
         template_map = {
             "default": "default",
             "comparison": "comparison",
             "dosage_followup": "dosage_followup",
+            "general": "general",
         }
         key = template_map.get(template, "default")
         prompt_config = _CHAT_PROMPTS.get(key, _CHAT_PROMPTS["default"])
         template_text = prompt_config["user"]
 
-        # 格式化对话历史
+        # 格式化近期对话历史（所有模板都注入）
         history_text = ""
-        if history and key == "dosage_followup":
+        if history:
             history_parts: list[str] = []
             for turn in history[-6:]:  # 最多保留最近 6 条
                 role = "用户" if turn.get("role") == "user" else "助手"
                 content = turn.get("content", "")
                 history_parts.append(f"{role}: {content}")
-            history_text = "\n".join(history_parts)
+            history_text = "近期对话：\n" + "\n".join(history_parts)
+
+        # 格式化记忆摘要（长期记忆）
+        memory_text = ""
+        if memory_summary:
+            memory_text = f"前序对话摘要：\n{memory_summary}\n"
 
         # 填充模板变量
         return template_text.format(
             context=context,
             question=query,
             history=history_text,
+            memory_summary=memory_text,
         )
 
     # ----------------------------------------------------------
@@ -364,6 +377,7 @@ class Generator:
         context_docs: list[dict],
         history: list[dict] | None = None,
         template: str | None = None,
+        memory_summary: str = "",
     ):
         """
         流式版本：逐 token yield 生成结果（用于 SSE）。
@@ -376,6 +390,7 @@ class Generator:
             context_docs: 检索到的参考文档列表
             history: 对话历史
             template: 提示词模板（不传则自动检测）
+            memory_summary: 早期对话的累积摘要
 
         Yields:
             str — 每次产出一个增量 token 文本
@@ -387,7 +402,9 @@ class Generator:
 
         context_text = self._format_context(context_docs)
         system_prompt = self._get_system_prompt(template)
-        user_prompt = self._get_user_prompt(template, context_text, query, history)
+        user_prompt = self._get_user_prompt(
+            template, context_text, query, history, memory_summary
+        )
 
         messages = [
             {"role": "system", "content": system_prompt},
@@ -446,6 +463,7 @@ def generate_answer(
     context_docs: list[dict],
     history: list[dict] | None = None,
     template: str | None = None,
+    memory_summary: str = "",
 ) -> GeneratedAnswer:
     """
     便捷函数：一行调用生成回答。
@@ -455,6 +473,7 @@ def generate_answer(
         context_docs: 检索到的参考文档
         history: 对话历史（可选）
         template: 提示词模板（可选，默认自动检测）
+        memory_summary: 早期对话的累积摘要（可选）
 
     Returns:
         GeneratedAnswer
@@ -465,4 +484,5 @@ def generate_answer(
         context_docs=context_docs,
         history=history,
         template=template,
+        memory_summary=memory_summary,
     )

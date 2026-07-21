@@ -138,6 +138,11 @@ class Config:
         return _env("APP_PORT", 8000, int)
 
     @property
+    def APP_API_KEY(self) -> str:
+        """应用 API Key（用于外部调用鉴权）。为空字符串时鉴权自动禁用。"""
+        return _env("APP_API_KEY", "")
+
+    @property
     def LOG_LEVEL(self) -> str:
         return _env("LOG_LEVEL", "INFO")
 
@@ -302,6 +307,29 @@ class Config:
         return _yaml_section("database.mysql.pool_recycle", 3600)
 
     # ============================================================
+    # 短期记忆配置
+    # ============================================================
+    @property
+    def memory_enabled(self) -> bool:
+        return _yaml_section("memory.enabled", True)
+
+    @property
+    def memory_summarize_model(self) -> str:
+        return _yaml_section("memory.summarize_model", "qwen-flash")
+
+    @property
+    def memory_recent_turns(self) -> int:
+        return _yaml_section("memory.recent_turns", 4)
+
+    @property
+    def memory_summary_max_tokens(self) -> int:
+        return _yaml_section("memory.summary_max_tokens", 600)
+
+    @property
+    def memory_max_summary_chars(self) -> int:
+        return _yaml_section("memory.max_summary_chars", 800)
+
+    # ============================================================
     # Redis 业务配置
     # ============================================================
     @property
@@ -315,6 +343,23 @@ class Config:
     @property
     def redis_cache_ttl(self) -> int:
         return _yaml_section("redis.cache_ttl", 300)
+
+    # ============================================================
+    # 安全配置
+    # ============================================================
+    @property
+    def auth_enabled(self) -> bool:
+        """API Key 鉴权开关。需要同时满足 config.yaml 启用 + APP_API_KEY 已配置。"""
+        yaml_enabled = _yaml_section("security.auth.enabled", False)
+        return bool(yaml_enabled and self.APP_API_KEY)
+
+    @property
+    def rate_limit_enabled(self) -> bool:
+        return _yaml_section("security.rate_limit.enabled", True)
+
+    @property
+    def rate_limit_requests_per_minute(self) -> int:
+        return _yaml_section("security.rate_limit.requests_per_minute", 60)
 
     # ============================================================
     # 应用配置

@@ -53,6 +53,36 @@ class AsyncRedisHistoryManager:
             logger.info(f"Redis 会话管理器已连接: {url}")
         return self._redis
 
+    # ----------------------------------------------------------
+    # 记忆摘要管理
+    # ----------------------------------------------------------
+    async def get_summary(self, session_id: str) -> str:
+        """
+        获取会话的记忆摘要。
+
+        Returns:
+            摘要文本。如果没有摘要，返回空字符串。
+        """
+        r = await self._get_redis()
+        raw = await r.get(self._summary_key(session_id))
+        return raw or ""
+
+    async def set_summary(self, session_id: str, summary: str) -> None:
+        """
+        设置会话的记忆摘要。
+
+        Args:
+            session_id: 会话 ID
+            summary: 摘要文本
+        """
+        r = await self._get_redis()
+        await r.set(
+            self._summary_key(session_id),
+            summary,
+            ex=self._ttl,  # 摘要与历史共享相同的 TTL
+        )
+        logger.debug(f"会话 {session_id} 记忆摘要已更新 ({len(summary)} 字符)")
+
     async def close(self) -> None:
         """关闭自管理的 Redis 连接。"""
         if self._own_redis and self._redis is not None:
@@ -66,6 +96,11 @@ class AsyncRedisHistoryManager:
     @staticmethod
     def _key(session_id: str) -> str:
         return f"session:{session_id}:history"
+
+    @staticmethod
+    def _summary_key(session_id: str) -> str:
+        """记忆摘要的 Redis key。"""
+        return f"session:{session_id}:summary"
 
     # ----------------------------------------------------------
     # 公共 API
@@ -148,15 +183,16 @@ class AsyncRedisHistoryManager:
 
     async def clear_history(self, session_id: str) -> bool:
         """
-        清除指定会话的历史记录。
+        清除指定会话的历史记录和记忆摘要。
 
         Returns:
             True 表示有记录被删除，False 表示不存在该会话。
         """
         r = await self._get_redis()
-        deleted = await r.delete(self._key(session_id))
+        # 同时清除历史和摘要
+        deleted = await r.delete(self._key(session_id), self._summary_key(session_id))
         if deleted:
-            logger.info(f"会话 {session_id} 历史已清除")
+            logger.info(f"会话 {session_id} 历史与摘要已清除")
         else:
             logger.debug(f"会话 {session_id} 不存在，无需清除")
         return deleted > 0

@@ -64,7 +64,7 @@ class ChatResponse(BaseModel):
     session_id: str = Field(description="会话 ID（用于后续追问）")
     intent: Optional[str] = Field(
         default=None,
-        description="意图识别结果：drug_inquiry / other",
+        description="意图识别结果：drug_inquiry / chitchat / general / attack",
     )
     elapsed_ms: Optional[float] = Field(
         default=None,

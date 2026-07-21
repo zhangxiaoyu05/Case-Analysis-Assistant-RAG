@@ -319,3 +319,31 @@ class MilvusClient:
         """返回 Collection 中的向量总数"""
         info = self.get_collection_info()
         return info.get("row_count", 0)
+
+    @property
+    def collection_name(self) -> str:
+        """公开 Collection 名称（供外部使用，如 Milvus delete_by_filter）"""
+        return self._collection_name
+
+    def delete_by_drug_name(self, drug_name: str) -> dict:
+        """
+        按药品名称删除 Milvus 中的向量。
+
+        Args:
+            drug_name: 药品名称
+
+        Returns:
+            pymilvus delete 结果字典
+        """
+        if not self.collection_exists():
+            logger.warning(f"Collection 不存在，跳过 Milvus 删除: {drug_name}")
+            return {"delete_count": 0}
+
+        filter_expr = f'drug_name == "{drug_name}"'
+        logger.info(f"Milvus 删除向量: filter={filter_expr}")
+        result = self.client.delete(
+            collection_name=self._collection_name,
+            filter=filter_expr,
+        )
+        logger.info(f"Milvus 删除完成: {result}")
+        return result

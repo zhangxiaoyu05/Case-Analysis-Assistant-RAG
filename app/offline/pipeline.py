@@ -3,6 +3,10 @@
 
 串联文档加载 → 清洗 → 切分 → 向量化 → MySQL + Milvus 入库的完整流程。
 
+支持:
+- 单药品文档: 一个文件 = 一种药品（常规流程）
+- 多药品合集: 一个文件包含多种药品 → 智能拆分后每种独立入库
+
 使用方式:
     from app.offline.pipeline import run_pipeline, PipelineResult
 
@@ -24,6 +28,11 @@ from app.db.mysql_client import MySQLClient
 from app.offline.cleaner import clean_text
 from app.offline.embedder import Embedder, EmbeddingResult
 from app.offline.loader import LoadedDocument, load_document
+from app.offline.multi_drug_splitter import (
+    SubDocument,
+    detect_multi_drug,
+    split_multi_drug,
+)
 from app.offline.splitter import Chunk, split_document
 
 
@@ -45,14 +54,17 @@ class PipelineResult:
     error_message: Optional[str] = None
     elapsed_seconds: float = 0.0
     warnings: list[str] = field(default_factory=list)
+    # 多药品合集拆分结果（仅合集文档有值）
+    sub_results: list["PipelineResult"] = field(default_factory=list)
 
 
 # ============================================================
-# 核心流程
+# 核心流程 — 单药品处理
 # ============================================================
-def run_pipeline(
-    file_path: Path,
-    drug_name: Optional[str] = None,
+def _process_single_drug(
+    raw_text: str,
+    drug_name: str,
+    source_file: str,
     drug_manufacturer: Optional[str] = None,
     drug_category: Optional[str] = None,
     desensitize: bool = False,
@@ -62,10 +74,427 @@ def run_pipeline(
     embedder: Optional[Embedder] = None,
 ) -> PipelineResult:
     """
+    处理单个药品文档的核心逻辑（步骤 2-8）。
+
+    对给定的文本执行：清洗 → 切分 → MySQL 入库 → 向量化 → Milvus 入库。
+
+    Args:
+        raw_text: 药品说明书的原始文本
+        drug_name: 药品名称
+        source_file: 来源文件名（用于日志/记录）
+        drug_manufacturer: 生产厂家
+        drug_category: 药品分类
+        desensitize: 是否启用 LLM 脱敏
+        batch_id: 批次 ID（自动生成）
+        mysql_client: MySQL 客户端（必传）
+        milvus_client: Milvus 客户端（必传）
+        embedder: Embedder 实例（必传）
+
+    Returns:
+        PipelineResult — 含状态、计数、耗时
+    """
+    t_start = time.time()
+    batch_id = batch_id or uuid.uuid4().hex[:12]
+
+    assert mysql_client is not None, "mysql_client is required"
+    assert milvus_client is not None, "milvus_client is required"
+    assert embedder is not None, "embedder is required"
+
+    warnings: list[str] = []
+
+    logger.info("=" * 60)
+    logger.info(f"💊 处理药品: {drug_name}")
+    logger.info(f"   batch_id: {batch_id}, 来源: {source_file}")
+    logger.info(f"   文本长度: {len(raw_text)} 字符")
+    logger.info("=" * 60)
+
+    # 创建索引批次记录
+    mysql_client.insert_index_record(
+        batch_id=batch_id,
+        drug_name=drug_name,
+        index_status="running",
+    )
+
+    try:
+        # ============================================================
+        # 步骤 2: 清洗
+        # ============================================================
+        logger.info("🧹 文本清洗...")
+        cleaned_text = clean_text(raw_text, desensitize=desensitize)
+
+        if not cleaned_text.strip():
+            _finalize_batch(
+                mysql_client, batch_id, "failed",
+                error_message="清洗后文本为空",
+            )
+            return PipelineResult(
+                batch_id=batch_id,
+                doc_id=-1,
+                drug_name=drug_name,
+                source_file=source_file,
+                total_chunks=0,
+                indexed_chunks=0,
+                failed_chunks=0,
+                status="failed",
+                error_message="清洗后文本为空",
+                elapsed_seconds=time.time() - t_start,
+            )
+
+        # ============================================================
+        # 步骤 3: 切分
+        # ============================================================
+        logger.info("✂️ 文本切分...")
+        chunks: list[Chunk] = split_document(cleaned_text)
+
+        if not chunks:
+            _finalize_batch(
+                mysql_client, batch_id, "failed",
+                error_message="切分后无有效文本块",
+            )
+            return PipelineResult(
+                batch_id=batch_id,
+                doc_id=-1,
+                drug_name=drug_name,
+                source_file=source_file,
+                total_chunks=0,
+                indexed_chunks=0,
+                failed_chunks=0,
+                status="failed",
+                error_message="切分后无有效文本块",
+                elapsed_seconds=time.time() - t_start,
+            )
+
+        # ============================================================
+        # 步骤 4: 存储原始文档到 MySQL
+        # ============================================================
+        logger.info("💾 存储原始文档到 MySQL...")
+        try:
+            doc_id = mysql_client.insert_raw_doc(
+                drug_name=drug_name,
+                raw_content=raw_text,
+                drug_manufacturer=drug_manufacturer,
+                drug_category=drug_category,
+                source_file=source_file,
+            )
+            logger.info(f"原始文档已存储: doc_id={doc_id}")
+        except Exception as e:
+            _finalize_batch(
+                mysql_client, batch_id, "failed",
+                error_message=f"MySQL 原始文档存储失败: {e}",
+            )
+            return PipelineResult(
+                batch_id=batch_id,
+                doc_id=-1,
+                drug_name=drug_name,
+                source_file=source_file,
+                total_chunks=len(chunks),
+                indexed_chunks=0,
+                failed_chunks=0,
+                status="failed",
+                error_message=f"MySQL 原始文档存储失败: {e}",
+                elapsed_seconds=time.time() - t_start,
+            )
+
+        # 更新索引记录
+        mysql_client.update_index_record(
+            batch_id=batch_id,
+            index_status="running",
+            total_chunks=len(chunks),
+        )
+
+        # ============================================================
+        # 步骤 5: 存储文本块到 MySQL（BM25 全文索引）
+        # ============================================================
+        logger.info(f"💾 存储 {len(chunks)} 个文本块到 MySQL...")
+        try:
+            chunk_records = []
+            for chunk in chunks:
+                chunk_records.append({
+                    "doc_id": doc_id,
+                    "drug_name": drug_name,
+                    "section": chunk.section[:50] if chunk.section else None,
+                    "chunk_index": chunk.chunk_index,
+                    "chunk_text": chunk.chunk_text,
+                    "char_count": chunk.char_count,
+                })
+
+            mysql_client.insert_chunks_batch(chunk_records)
+            logger.info(f"文本块已存储: {len(chunk_records)} 条")
+        except Exception as e:
+            _finalize_batch(
+                mysql_client, batch_id, "failed",
+                error_message=f"MySQL 文本块存储失败: {e}",
+                total_chunks=len(chunks),
+            )
+            return PipelineResult(
+                batch_id=batch_id,
+                doc_id=doc_id,
+                drug_name=drug_name,
+                source_file=source_file,
+                total_chunks=len(chunks),
+                indexed_chunks=0,
+                failed_chunks=len(chunks),
+                status="partial",
+                error_message=f"MySQL 文本块存储失败 (raw_doc 已入库): {e}",
+                elapsed_seconds=time.time() - t_start,
+            )
+
+        # ============================================================
+        # 步骤 6: 向量化
+        # ============================================================
+        logger.info("🧮 生成向量嵌入...")
+        chunk_texts = [c.chunk_text for c in chunks]
+        emb_result: EmbeddingResult = embedder.embed(chunk_texts)
+
+        # ============================================================
+        # 步骤 7: 存储向量到 Milvus
+        # ============================================================
+        indexed_chunks = 0
+        failed_chunks = 0
+        error_msg: Optional[str] = None
+        status = "completed"
+
+        if not emb_result.embeddings or all(v is None for v in emb_result.embeddings):
+            logger.warning("所有向量化均失败，跳过 Milvus 入库")
+            status = "partial"
+            error_msg = "所有向量化均失败（BM25 检索仍可用）"
+            failed_chunks = len(chunks)
+        else:
+            logger.info("💾 存储向量到 Milvus...")
+
+            if not milvus_client.collection_exists():
+                error_msg = (
+                    "Milvus Collection 不存在，请先运行: python scripts/init_milvus.py"
+                )
+                logger.error(error_msg)
+                _finalize_batch(
+                    mysql_client, batch_id, "partial",
+                    total_chunks=len(chunks),
+                    indexed_chunks=0,
+                    failed_chunks=len(chunks),
+                    error_message=error_msg,
+                )
+                return PipelineResult(
+                    batch_id=batch_id,
+                    doc_id=doc_id,
+                    drug_name=drug_name,
+                    source_file=source_file,
+                    total_chunks=len(chunks),
+                    indexed_chunks=0,
+                    failed_chunks=len(chunks),
+                    status="partial",
+                    error_message=error_msg,
+                    elapsed_seconds=time.time() - t_start,
+                )
+
+            valid_vectors = []
+            valid_metadata = []
+            for i, vec in enumerate(emb_result.embeddings):
+                if vec is not None:
+                    valid_vectors.append(vec)
+                    valid_metadata.append({
+                        "doc_id": doc_id,
+                        "chunk_index": chunks[i].chunk_index,
+                        "drug_name": drug_name,
+                        "section": chunks[i].section[:50] if chunks[i].section else "",
+                        "chunk_text": chunks[i].chunk_text,
+                    })
+                else:
+                    failed_chunks += 1
+
+            if valid_vectors:
+                try:
+                    insert_result = milvus_client.insert_embeddings(valid_vectors, valid_metadata)
+                    indexed_chunks = insert_result.get("insert_count", len(valid_vectors))
+                    logger.info(f"向量已存储到 Milvus: {indexed_chunks} 条")
+                except Exception as e:
+                    logger.error(f"Milvus 插入失败: {e}")
+                    failed_chunks += len(valid_vectors)
+                    indexed_chunks = 0
+                    if not warnings:
+                        warnings.append(f"Milvus 插入失败: {e}")
+            else:
+                logger.warning("无有效向量可插入 Milvus")
+
+            if failed_chunks == 0:
+                status = "completed"
+                error_msg = None
+            elif indexed_chunks > 0:
+                status = "partial"
+                error_msg = f"{failed_chunks} 个 chunk 向量化/入库失败（BM25 仍可用）"
+            else:
+                status = "partial"
+                error_msg = (
+                    f"所有 {failed_chunks} 个 chunk 的 Milvus 入库失败（BM25 检索仍可用）"
+                )
+
+        # ============================================================
+        # 步骤 8: 更新索引批次状态
+        # ============================================================
+        _finalize_batch(
+            mysql_client, batch_id, status,
+            total_chunks=len(chunks),
+            indexed_chunks=indexed_chunks,
+            failed_chunks=failed_chunks,
+            error_message=error_msg,
+        )
+
+        elapsed = time.time() - t_start
+        logger.info(
+            f"✅ 药品处理完成: {drug_name} "
+            f"({len(chunks)} chunks, {indexed_chunks} 索引, {elapsed:.1f}s)"
+        )
+
+        return PipelineResult(
+            batch_id=batch_id,
+            doc_id=doc_id,
+            drug_name=drug_name,
+            source_file=source_file,
+            total_chunks=len(chunks),
+            indexed_chunks=indexed_chunks,
+            failed_chunks=failed_chunks,
+            status=status,
+            error_message=error_msg,
+            elapsed_seconds=elapsed,
+            warnings=warnings,
+        )
+
+    except Exception as e:
+        elapsed = time.time() - t_start
+        logger.exception(f"处理异常 [{drug_name}]: {e}")
+        try:
+            _finalize_batch(
+                mysql_client, batch_id, "failed",
+                error_message=str(e),
+            )
+        except Exception:
+            pass
+
+        return PipelineResult(
+            batch_id=batch_id,
+            doc_id=-1,
+            drug_name=drug_name,
+            source_file=source_file,
+            total_chunks=0,
+            indexed_chunks=0,
+            failed_chunks=0,
+            status="failed",
+            error_message=str(e),
+            elapsed_seconds=elapsed,
+        )
+
+
+# ============================================================
+# 多药品结果聚合
+# ============================================================
+def _aggregate_results(
+    results: list[PipelineResult],
+    source_file: str,
+    batch_id: str,
+    elapsed: float,
+) -> PipelineResult:
+    """
+    将多个子药品的处理结果聚合为一个汇总结果。
+
+    Args:
+        results: 各子药品的 PipelineResult 列表
+        source_file: 来源文件
+        batch_id: 父批次 ID
+        elapsed: 总耗时（秒）
+
+    Returns:
+        聚合后的 PipelineResult
+    """
+    if not results:
+        return PipelineResult(
+            batch_id=batch_id,
+            doc_id=-1,
+            drug_name="多药品合集(0种)",
+            source_file=source_file,
+            total_chunks=0,
+            indexed_chunks=0,
+            failed_chunks=0,
+            status="failed",
+            error_message="拆分后无有效药品文档",
+            elapsed_seconds=elapsed,
+        )
+
+    total_chunks = sum(r.total_chunks for r in results)
+    indexed_chunks = sum(r.indexed_chunks for r in results)
+    failed_chunks = sum(r.failed_chunks for r in results)
+
+    # 状态判定：全部 completed → completed；否则 partial
+    all_completed = all(r.status == "completed" for r in results)
+    any_failed = any(r.status == "failed" for r in results)
+
+    if all_completed:
+        status = "completed"
+    elif any_failed:
+        status = "partial"
+    else:
+        status = "partial"
+
+    # 汇总警告和错误
+    warnings: list[str] = []
+    for r in results:
+        if r.status == "failed":
+            warnings.append(f"[{r.drug_name}] 失败: {r.error_message}")
+        elif r.status == "partial":
+            warnings.append(f"[{r.drug_name}] 部分成功: {r.indexed_chunks}/{r.total_chunks} chunks")
+        else:
+            warnings.append(f"[{r.drug_name}] 完成: {r.total_chunks} chunks")
+
+    drug_names = [r.drug_name for r in results]
+    drug_name_summary = f"多药品合集({len(results)}种: {', '.join(drug_names[:5])}{'...' if len(drug_names) > 5 else ''})"
+
+    logger.info("=" * 60)
+    logger.info(f"📊 合集处理汇总: {len(results)} 种药品")
+    logger.info(f"   总 chunks: {total_chunks}, 已索引: {indexed_chunks}, 失败: {failed_chunks}")
+    logger.info(f"   状态: {status}")
+    logger.info("=" * 60)
+
+    return PipelineResult(
+        batch_id=batch_id,
+        doc_id=-1,  # 合集没有单一 doc_id
+        drug_name=drug_name_summary,
+        source_file=source_file,
+        total_chunks=total_chunks,
+        indexed_chunks=indexed_chunks,
+        failed_chunks=failed_chunks,
+        status=status,
+        error_message=None if all_completed else f"{sum(1 for r in results if r.status == 'failed')} 种药品处理失败",
+        elapsed_seconds=elapsed,
+        warnings=warnings,
+        sub_results=results,
+    )
+
+
+# ============================================================
+# 公共 API — run_pipeline
+# ============================================================
+def run_pipeline(
+    file_path: Path,
+    drug_name: Optional[str] = None,
+    drug_manufacturer: Optional[str] = None,
+    drug_category: Optional[str] = None,
+    desensitize: bool = False,
+    overwrite: bool = False,
+    batch_id: Optional[str] = None,
+    mysql_client: Optional[MySQLClient] = None,
+    milvus_client: Optional[MilvusClient] = None,
+    embedder: Optional[Embedder] = None,
+) -> PipelineResult:
+    """
     对单个文档执行完整的离线处理流程。
+
+    支持：
+    - 单药品文档：按常规流程处理（一个文件 → 一种药品）
+    - 多药品合集文档：智能检测并拆分为多个独立药品，每种独立入库
 
     流程:
         1. load_document() — 加载文档原文
+        1.5 (新增) detect_multi_drug() — 检测是否为多药品合集
+            如果是合集 → split_multi_drug() → 每种药品独立执行步骤 2-8
         2. clean_text() — 清洗文本
         3. split_document() — 章节感知切分
         4. insert_raw_doc() — 存 MySQL 原始文档
@@ -80,13 +509,15 @@ def run_pipeline(
         drug_manufacturer: 生产厂家
         drug_category: 药品分类
         desensitize: 是否启用 LLM 脱敏
+        overwrite: 药品已存在时是否覆盖旧数据（默认 False，已存在则跳过）
         batch_id: 批次 ID（自动生成 UUID）
         mysql_client: 现有 MySQL 客户端（不传则自动创建）
         milvus_client: 现有 Milvus 客户端（不传则自动创建）
         embedder: 现有 Embedder（不传则自动创建）
 
     Returns:
-        PipelineResult — 含状态、计数、耗时
+        PipelineResult — 含状态、计数、耗时。
+        多药品合集文档的 sub_results 字段包含每种药品的独立结果。
     """
     t_start = time.time()
     batch_id = batch_id or uuid.uuid4().hex[:12]
@@ -105,8 +536,6 @@ def run_pipeline(
         milvus_client.connect()
     if embedder is None:
         embedder = Embedder()
-
-    warnings: list[str] = []
 
     try:
         # ============================================================
@@ -147,263 +576,123 @@ def run_pipeline(
                 elapsed_seconds=time.time() - t_start,
             )
 
-        # 确定药名
+        # ============================================================
+        # 步骤 1.5: 多药品文档检测与拆分 (NEW)
+        # ============================================================
+        if detect_multi_drug(doc.raw_text):
+            logger.info("🔍 检测到多药品合集文档，启动智能拆分...")
+            sub_docs: list[SubDocument] = split_multi_drug(doc.raw_text)
+            logger.info(f"拆分完成: {len(sub_docs)} 种药品将独立入库")
+
+            # 逐一处理每种药品
+            all_results: list[PipelineResult] = []
+            for i, sub in enumerate(sub_docs):
+                logger.info(f"\n--- 处理子文档 {i + 1}/{len(sub_docs)}: {sub.drug_name} ---")
+                sub_batch_id = f"{batch_id}_{i}"
+                resolved_sub_name = drug_name if i == 0 and drug_name else sub.drug_name
+
+                # 检查子药品是否已存在
+                if mysql_client.drug_exists(resolved_sub_name):
+                    if overwrite:
+                        logger.info(f"药品 '{resolved_sub_name}' 已存在，覆盖模式：先删除旧数据")
+                        _delete_drug_data(mysql_client, milvus_client, resolved_sub_name)
+                    else:
+                        logger.info(f"药品 '{resolved_sub_name}' 已存在，跳过")
+                        all_results.append(PipelineResult(
+                            batch_id=sub_batch_id,
+                            doc_id=-1,
+                            drug_name=resolved_sub_name,
+                            source_file=str(file_path),
+                            total_chunks=0,
+                            indexed_chunks=0,
+                            failed_chunks=0,
+                            status="skipped",
+                            error_message=f"药品 '{resolved_sub_name}' 已存在",
+                            elapsed_seconds=0,
+                        ))
+                        continue
+
+                try:
+                    sub_result = _process_single_drug(
+                        raw_text=sub.text,
+                        drug_name=resolved_sub_name,
+                        source_file=f"{file_path}#{sub.drug_name}",
+                        drug_manufacturer=drug_manufacturer,
+                        drug_category=drug_category,
+                        desensitize=desensitize,
+                        batch_id=sub_batch_id,
+                        mysql_client=mysql_client,
+                        milvus_client=milvus_client,
+                        embedder=embedder,
+                    )
+                except Exception as e:
+                    logger.error(f"子文档处理异常 [{resolved_sub_name}]: {e}")
+                    sub_result = PipelineResult(
+                        batch_id=sub_batch_id,
+                        doc_id=-1,
+                        drug_name=resolved_sub_name,
+                        source_file=str(file_path),
+                        total_chunks=0,
+                        indexed_chunks=0,
+                        failed_chunks=0,
+                        status="failed",
+                        error_message=str(e),
+                        elapsed_seconds=0,
+                    )
+                all_results.append(sub_result)
+
+            elapsed = time.time() - t_start
+            return _aggregate_results(all_results, str(file_path), batch_id, elapsed)
+
+        # ============================================================
+        # 单药品文档: 去重检查 + 正常流程
+        # ============================================================
         resolved_drug_name = drug_name or doc.inferred_drug_name or file_path.stem
         logger.info(f"药品名称: {resolved_drug_name}")
 
-        # 创建索引批次记录
-        mysql_client.insert_index_record(
-            batch_id=batch_id,
-            drug_name=resolved_drug_name,
-            index_status="running",
-        )
-
-        # ============================================================
-        # 步骤 2: 清洗
-        # ============================================================
-        logger.info("🧹 文本清洗...")
-        cleaned_text = clean_text(doc.raw_text, desensitize=desensitize)
-
-        if not cleaned_text.strip():
-            _finalize_batch(
-                mysql_client, batch_id, "failed",
-                error_message="清洗后文本为空",
-            )
-            return PipelineResult(
-                batch_id=batch_id,
-                doc_id=-1,
-                drug_name=resolved_drug_name,
-                source_file=str(file_path),
-                total_chunks=0,
-                indexed_chunks=0,
-                failed_chunks=0,
-                status="failed",
-                error_message="清洗后文本为空",
-                elapsed_seconds=time.time() - t_start,
-            )
-
-        # ============================================================
-        # 步骤 3: 切分
-        # ============================================================
-        logger.info("✂️ 文本切分...")
-        chunks: list[Chunk] = split_document(cleaned_text)
-
-        if not chunks:
-            _finalize_batch(
-                mysql_client, batch_id, "failed",
-                error_message="切分后无有效文本块",
-            )
-            return PipelineResult(
-                batch_id=batch_id,
-                doc_id=-1,
-                drug_name=resolved_drug_name,
-                source_file=str(file_path),
-                total_chunks=0,
-                indexed_chunks=0,
-                failed_chunks=0,
-                status="failed",
-                error_message="切分后无有效文本块",
-                elapsed_seconds=time.time() - t_start,
-            )
-
-        # ============================================================
-        # 步骤 4: 存储原始文档到 MySQL
-        # ============================================================
-        logger.info("💾 存储原始文档到 MySQL...")
-        try:
-            doc_id = mysql_client.insert_raw_doc(
-                drug_name=resolved_drug_name,
-                raw_content=doc.raw_text,
-                drug_manufacturer=drug_manufacturer,
-                drug_category=drug_category,
-                source_file=str(file_path),
-            )
-            logger.info(f"原始文档已存储: doc_id={doc_id}")
-        except Exception as e:
-            _finalize_batch(
-                mysql_client, batch_id, "failed",
-                error_message=f"MySQL 原始文档存储失败: {e}",
-            )
-            return PipelineResult(
-                batch_id=batch_id,
-                doc_id=-1,
-                drug_name=resolved_drug_name,
-                source_file=str(file_path),
-                total_chunks=len(chunks),
-                indexed_chunks=0,
-                failed_chunks=0,
-                status="failed",
-                error_message=f"MySQL 原始文档存储失败: {e}",
-                elapsed_seconds=time.time() - t_start,
-            )
-
-        # 更新索引记录
-        mysql_client.update_index_record(
-            batch_id=batch_id,
-            index_status="running",
-            total_chunks=len(chunks),
-        )
-
-        # ============================================================
-        # 步骤 5: 存储文本块到 MySQL（BM25 全文索引）
-        # ============================================================
-        logger.info(f"💾 存储 {len(chunks)} 个文本块到 MySQL...")
-        try:
-            chunk_records = []
-            for chunk in chunks:
-                chunk_records.append({
-                    "doc_id": doc_id,
-                    "drug_name": resolved_drug_name,
-                    "section": chunk.section[:50] if chunk.section else None,  # VARCHAR 50 限制
-                    "chunk_index": chunk.chunk_index,
-                    "chunk_text": chunk.chunk_text,
-                    "char_count": chunk.char_count,
-                })
-
-            mysql_client.insert_chunks_batch(chunk_records)
-            logger.info(f"文本块已存储: {len(chunk_records)} 条")
-        except Exception as e:
-            # MySQL chunk 存储失败，raw_doc 已入库（孤立但无害）
-            _finalize_batch(
-                mysql_client, batch_id, "failed",
-                error_message=f"MySQL 文本块存储失败: {e}",
-                total_chunks=len(chunks),
-            )
-            return PipelineResult(
-                batch_id=batch_id,
-                doc_id=doc_id,
-                drug_name=resolved_drug_name,
-                source_file=str(file_path),
-                total_chunks=len(chunks),
-                indexed_chunks=0,
-                failed_chunks=len(chunks),
-                status="partial",
-                error_message=f"MySQL 文本块存储失败 (raw_doc 已入库): {e}",
-                elapsed_seconds=time.time() - t_start,
-            )
-
-        # ============================================================
-        # 步骤 6: 向量化
-        # ============================================================
-        logger.info("🧮 生成向量嵌入...")
-        chunk_texts = [c.chunk_text for c in chunks]
-        emb_result: EmbeddingResult = embedder.embed(chunk_texts)
-
-        # ============================================================
-        # 步骤 7: 存储向量到 Milvus
-        # ============================================================
-        indexed_chunks = 0
-        failed_chunks = 0
-
-        if not emb_result.embeddings or all(v is None for v in emb_result.embeddings):
-            logger.warning("所有向量化均失败，跳过 Milvus 入库")
-            status = "partial"
-            error_msg = "所有向量化均失败（BM25 检索仍可用）"
-            failed_chunks = len(chunks)
-        else:
-            logger.info("💾 存储向量到 Milvus...")
-
-            # 确保 Milvus Collection 存在（否则插入会报错）
-            if not milvus_client.collection_exists():
-                error_msg = (
-                    "Milvus Collection 不存在，请先运行: python scripts/init_milvus.py"
-                )
-                logger.error(error_msg)
-                _finalize_batch(
-                    mysql_client, batch_id, "partial",
-                    total_chunks=len(chunks),
-                    indexed_chunks=0,
-                    failed_chunks=len(chunks),
-                    error_message=error_msg,
-                )
+        # 检查药品是否已存在
+        if mysql_client.drug_exists(resolved_drug_name):
+            if overwrite:
+                logger.info(f"药品 '{resolved_drug_name}' 已存在，覆盖模式：先删除旧数据")
+                _delete_drug_data(mysql_client, milvus_client, resolved_drug_name)
+            else:
+                elapsed = time.time() - t_start
+                logger.info(f"药品 '{resolved_drug_name}' 已存在，跳过（使用 --overwrite 覆盖）")
                 return PipelineResult(
                     batch_id=batch_id,
-                    doc_id=doc_id,
+                    doc_id=-1,
                     drug_name=resolved_drug_name,
                     source_file=str(file_path),
-                    total_chunks=len(chunks),
+                    total_chunks=0,
                     indexed_chunks=0,
-                    failed_chunks=len(chunks),
-                    status="partial",
-                    error_message=error_msg,
-                    elapsed_seconds=time.time() - t_start,
+                    failed_chunks=0,
+                    status="skipped",
+                    error_message=f"药品 '{resolved_drug_name}' 已存在，使用 overwrite=True 覆盖",
+                    elapsed_seconds=elapsed,
                 )
 
-            # 收集有效的（向量化成功的）chunk
-            valid_vectors = []
-            valid_metadata = []
-            for i, vec in enumerate(emb_result.embeddings):
-                if vec is not None:
-                    valid_vectors.append(vec)
-                    valid_metadata.append({
-                        "doc_id": doc_id,
-                        "chunk_index": chunks[i].chunk_index,
-                        "drug_name": resolved_drug_name,
-                        "section": chunks[i].section[:50] if chunks[i].section else "",
-                        "chunk_text": chunks[i].chunk_text,
-                    })
-                else:
-                    failed_chunks += 1
-
-            if valid_vectors:
-                try:
-                    insert_result = milvus_client.insert_embeddings(valid_vectors, valid_metadata)
-                    indexed_chunks = insert_result.get("insert_count", len(valid_vectors))
-                    logger.info(f"向量已存储到 Milvus: {indexed_chunks} 条")
-                except Exception as e:
-                    logger.error(f"Milvus 插入失败: {e}")
-                    failed_chunks += len(valid_vectors)
-                    indexed_chunks = 0
-                    if not warnings:
-                        warnings.append(f"Milvus 插入失败: {e}")
-            else:
-                logger.warning("无有效向量可插入 Milvus")
-
-            # 确定最终状态
-            if failed_chunks == 0:
-                status = "completed"
-                error_msg = None
-            elif indexed_chunks > 0:
-                status = "partial"
-                error_msg = f"{failed_chunks} 个 chunk 向量化/入库失败（BM25 仍可用）"
-            else:
-                status = "partial"
-                error_msg = (
-                    f"所有 {failed_chunks} 个 chunk 的 Milvus 入库失败（BM25 检索仍可用）"
-                )
-
-        # ============================================================
-        # 步骤 8: 更新索引批次状态
-        # ============================================================
-        _finalize_batch(
-            mysql_client, batch_id, status,
-            total_chunks=len(chunks),
-            indexed_chunks=indexed_chunks,
-            failed_chunks=failed_chunks,
-            error_message=error_msg,
+        result = _process_single_drug(
+            raw_text=doc.raw_text,
+            drug_name=resolved_drug_name,
+            source_file=str(file_path),
+            drug_manufacturer=drug_manufacturer,
+            drug_category=drug_category,
+            desensitize=desensitize,
+            batch_id=batch_id,
+            mysql_client=mysql_client,
+            milvus_client=milvus_client,
+            embedder=embedder,
         )
 
         elapsed = time.time() - t_start
         logger.info("=" * 60)
         logger.info(
-            f"✅ 处理完成: {resolved_drug_name} "
-            f"({len(chunks)} chunks, {indexed_chunks} 索引, {elapsed:.1f}s)"
+            f"✅ 处理完成: {result.drug_name} "
+            f"({result.total_chunks} chunks, {result.indexed_chunks} 索引, {elapsed:.1f}s)"
         )
         logger.info("=" * 60)
 
-        return PipelineResult(
-            batch_id=batch_id,
-            doc_id=doc_id,
-            drug_name=resolved_drug_name,
-            source_file=str(file_path),
-            total_chunks=len(chunks),
-            indexed_chunks=indexed_chunks,
-            failed_chunks=failed_chunks,
-            status=status,
-            error_message=error_msg,
-            elapsed_seconds=elapsed,
-            warnings=warnings,
-        )
+        return result
 
     except Exception as e:
         # 未捕获的异常
@@ -443,6 +732,7 @@ def run_pipeline(
 # ============================================================
 def run_pipeline_batch(
     file_paths: list[Path],
+    overwrite: bool = False,
     **kwargs,
 ) -> list[PipelineResult]:
     """
@@ -472,6 +762,7 @@ def run_pipeline_batch(
             logger.info(f"{'=' * 60}")
             result = run_pipeline(
                 file_path=fp,
+                overwrite=overwrite,
                 mysql_client=mysql_client,
                 milvus_client=milvus_client,
                 embedder=embedder,
@@ -503,6 +794,38 @@ def run_pipeline_batch(
 # ============================================================
 # 辅助函数
 # ============================================================
+def _delete_drug_data(
+    mysql_client: MySQLClient,
+    milvus_client: MilvusClient,
+    drug_name: str,
+) -> int:
+    """
+    删除指定药品在 MySQL 和 Milvus 中的全部数据。
+
+    用于 overwrite 模式：先清理旧数据，再入库新数据。
+    容错设计：Milvus 删除失败不影响 MySQL 删除结果。
+
+    Args:
+        mysql_client: MySQL 客户端
+        milvus_client: Milvus 客户端
+        drug_name: 药品名称
+
+    Returns:
+        MySQL 中删除的 doc 数量
+    """
+    # 1. MySQL 删除
+    deleted_doc_ids = mysql_client.delete_drug_by_name(drug_name)
+
+    # 2. Milvus 向量删除（容错：Collection 可能不存在或为空）
+    if deleted_doc_ids:
+        try:
+            milvus_client.delete_by_drug_name(drug_name)
+        except Exception as e:
+            logger.warning(f"Milvus 删除药品 '{drug_name}' 向量失败（不影响 MySQL 数据）: {e}")
+
+    return len(deleted_doc_ids)
+
+
 def _finalize_batch(
     mysql_client: MySQLClient,
     batch_id: str,

@@ -44,13 +44,18 @@ class TestHealthCheck:
         assert data["version"] == "0.1.0"
         assert "timestamp" in data
 
-    def test_root_returns_message(self, client):
-        """根路径返回 API 信息。"""
+    def test_root_returns_html_or_fallback(self, client):
+        """根路径返回问答页面 HTML（或 fallback JSON）。"""
         response = client.get("/")
         assert response.status_code == 200
-        data = response.json()
-        assert "message" in data
-        assert "docs" in data
+        content_type = response.headers.get("content-type", "")
+        if "text/html" in content_type:
+            # 有前端文件时返回 HTML 页面
+            assert "药品" in response.text or "chat" in response.text.lower()
+        else:
+            # 无前端文件时 fallback 为 JSON
+            data = response.json()
+            assert "message" in data
 
 
 # ============================================================

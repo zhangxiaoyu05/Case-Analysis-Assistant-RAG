@@ -32,6 +32,8 @@ def _set_test_env(monkeypatch):
     monkeypatch.setenv("REDIS_HOST", "localhost")
     monkeypatch.setenv("REDIS_PORT", "6379")
     monkeypatch.setenv("REDIS_PASSWORD", "")
+    # 鉴权测试: 默认不设 API Key → 鉴权跳过，保持向后兼容
+    monkeypatch.setenv("APP_API_KEY", "")
     yield
 
 
@@ -187,6 +189,9 @@ def mock_mysql_client():
     client.insert_chunks_batch.return_value = None
     client.insert_index_record.return_value = None
     client.update_index_record.return_value = None
+    client.drug_exists.return_value = False
+    client.delete_drug_by_name.return_value = []
+    client.get_index_record.return_value = None
     client.bm25_search.return_value = [
         {"doc_id": 1, "drug_name": "阿司匹林肠溶片", "chunk_text": "用于解热镇痛...",
          "section": "适应症", "score": 8.5, "chunk_index": 0},

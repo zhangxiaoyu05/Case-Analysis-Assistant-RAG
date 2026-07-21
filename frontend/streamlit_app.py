@@ -16,6 +16,7 @@ from pathlib import Path
 
 # 确保项目根目录在 Python 路径中
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
+UPLOAD_DIR = PROJECT_ROOT / "data" / "uploads"
 sys.path.insert(0, str(PROJECT_ROOT))
 
 import streamlit as st
@@ -105,6 +106,7 @@ def init_session_state():
     defaults = {
         "messages": [],       # 对话消息列表: [{"role": "user/assistant", "content": "...", "sources": [...]}]
         "chat_history_llm": [],  # LLM 用的对话历史（仅 role+content）
+        "memory_summary": "",    # 早期对话的累积摘要
         "processing": False,  # 是否正在处理
     }
     for key, val in defaults.items():
@@ -165,8 +167,33 @@ def render_sidebar():
         with col2:
             upload_btn = st.button("🚀 入库", type="primary", use_container_width=True)
 
+        # 提前检测药品是否已存在（有文件且有药名时）
+        overwrite = False
+        if uploaded_file is not None:
+            from app.offline.loader import infer_drug_name
+            # 先暂存文件以推断药名
+            tmp_check_path = UPLOAD_DIR / f"_check_{uploaded_file.name}"
+            tmp_check_path.write_bytes(uploaded_file.getvalue())
+            inferred = drug_name_input.strip() if drug_name_input.strip() else infer_drug_name(tmp_check_path)
+            # 清理临时文件
+            if tmp_check_path.exists():
+                tmp_check_path.unlink()
+
+            if inferred:
+                try:
+                    mysql, _ = get_clients()
+                    if mysql.drug_exists(inferred):
+                        st.warning(f"⚠️ 药品「**{inferred}**」已存在于知识库中")
+                        overwrite = st.checkbox(
+                            f"覆盖已有「{inferred}」的数据（删除旧文档后重新入库）",
+                            value=False,
+                            key="overwrite_checkbox",
+                        )
+                except Exception:
+                    pass
+
         if upload_btn and uploaded_file is not None:
-            _handle_upload(uploaded_file, drug_name_input)
+            _handle_upload(uploaded_file, drug_name_input, overwrite=overwrite)
         elif upload_btn and uploaded_file is None:
             st.warning("请先选择文件")
 
@@ -185,11 +212,13 @@ def render_sidebar():
         if st.button("🗑️ 清空对话", use_container_width=True):
             st.session_state.messages = []
             st.session_state.chat_history_llm = []
+            st.session_state.memory_summary = ""
             st.rerun()
 
 
-def _handle_upload(uploaded_file, drug_name_input: str):
+def _handle_upload(uploaded_file, drug_name_input: str, overwrite: bool = False):
     """处理文件上传并调用离线入库流程。"""
+    from app.offline.loader import infer_drug_name
     from app.offline.pipeline import run_pipeline
 
     # 保存上传文件到 data/uploads/ 目录，使用原始文件名（保留药名信息）
@@ -202,11 +231,41 @@ def _handle_upload(uploaded_file, drug_name_input: str):
 
     drug_name = drug_name_input.strip() if drug_name_input.strip() else None
 
+    # 如果用户未指定药名，从文件路径推断
+    if not drug_name:
+        drug_name = infer_drug_name(tmp_path)
+
+    # 检查药品是否已存在
+    drug_exists = False
+    if drug_name:
+        try:
+            from app.db.mysql_client import MySQLClient
+            mysql, _ = get_clients()
+            drug_exists = mysql.drug_exists(drug_name)
+        except Exception:
+            pass
+
+    # 如果已存在且未确认覆盖，先提示用户
+    if drug_exists and not overwrite:
+        st.warning(f"⚠️ 「{drug_name}」已存在于知识库中。")
+        st.checkbox(
+            "覆盖已有数据（将删除「{0}」的旧文档、chunks、向量后重新入库）".format(drug_name),
+            key="confirm_overwrite",
+            value=False,
+        )
+        if st.session_state.get("confirm_overwrite", False):
+            overwrite = True
+            st.info("将覆盖已有数据...")
+        else:
+            st.info("如需覆盖，请勾选上方复选框后重新点击入库。")
+            return
+
     with st.spinner(f"正在处理「{uploaded_file.name}」..."):
         try:
             result = run_pipeline(
                 file_path=tmp_path,
                 drug_name=drug_name,
+                overwrite=overwrite,
             )
 
             if result.status == "completed":
@@ -214,12 +273,20 @@ def _handle_upload(uploaded_file, drug_name_input: str):
                     f"✅ 「{result.drug_name}」入库成功！\n\n"
                     f"{result.total_chunks} 个文本块已索引到向量库"
                 )
+                # 刷新知识库统计
+                st.rerun()
+            elif result.status == "skipped":
+                st.warning(
+                    f"⏭️ 「{result.drug_name}」已存在，跳过入库。\n\n"
+                    f"如需覆盖，请勾选覆盖选项后重新上传。"
+                )
             elif result.status == "partial":
                 st.warning(
                     f"⚠️ 「{result.drug_name}」部分入库成功\n\n"
                     f"已索引 {result.indexed_chunks}/{result.total_chunks} 个文本块\n"
                     f"原因: {result.error_message}"
                 )
+                st.rerun()
             else:
                 st.error(f"❌ 入库失败: {result.error_message}")
 
@@ -391,13 +458,29 @@ def _handle_query(query: str):
         st.session_state.chat_history_llm.append({"role": "assistant", "content": answer})
         return
 
-    # ---- 拒绝: 非药品问题 ----
-    if intent_result.intent == "other":
-        answer = (
-            "抱歉，这个问题超出了药品知识范围，我无法给出专业回答。\n\n"
-            "我是药品知识问答助手，擅长回答药品适应症、用法用量、禁忌、不良反应、药物相互作用等问题。\n\n"
-            "您可以换个药品相关的问题试试，我很乐意帮助您！"
-        )
+    # ---- 攻击: 安全拒绝 ----
+    if intent_result.intent == "attack":
+        answer = "抱歉，您的请求包含不安全的输入，无法处理。如果您有药品相关的正常问题，请重新表述后提问。"
+        st.markdown(answer)
+        st.session_state.messages.append({"role": "assistant", "content": answer, "sources": []})
+        st.session_state.chat_history_llm.append({"role": "assistant", "content": answer})
+        return
+
+    # ---- 通用问题: LLM 直接回答（不走 RAG 检索） ----
+    if intent_result.intent == "general":
+        with st.spinner("💬 思考中..."):
+            try:
+                gen = Generator()
+                gen_result = gen.generate(
+                    query=query,
+                    context_docs=[],  # 不传检索结果
+                    template="general",
+                    history=st.session_state.chat_history_llm,
+                    memory_summary=st.session_state.memory_summary,
+                )
+                answer = gen_result.answer
+            except Exception as e:
+                answer = f"我主要擅长药品知识问答，这个问题不是我的专长领域。建议通过其他专业渠道获取更准确的信息。（生成失败: {e}）"
         st.markdown(answer)
         st.session_state.messages.append({"role": "assistant", "content": answer, "sources": []})
         st.session_state.chat_history_llm.append({"role": "assistant", "content": answer})
@@ -446,6 +529,7 @@ def _handle_query(query: str):
             query=query,
             context_docs=ranked_dicts,
             history=st.session_state.chat_history_llm,
+            memory_summary=st.session_state.memory_summary,
         )
 
         # 逐个 token 流式展示

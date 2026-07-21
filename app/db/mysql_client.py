@@ -171,6 +171,68 @@ class MySQLClient:
             cursor.execute(sql)
             return [row["drug_name"] for row in cursor.fetchall()]
 
+    def drug_exists(self, drug_name: str) -> bool:
+        """
+        检查指定药品名称是否已存在于知识库中。
+
+        Args:
+            drug_name: 药品名称
+
+        Returns:
+            True 表示该药品已有入库记录
+        """
+        sql = f"SELECT COUNT(*) AS cnt FROM {self._raw_docs_table} WHERE drug_name = %s"
+        with self.conn.cursor() as cursor:
+            cursor.execute(sql, (drug_name,))
+            result = cursor.fetchone()
+            return (result["cnt"] if result else 0) > 0
+
+    def delete_drug_by_name(self, drug_name: str) -> list[int]:
+        """
+        删除指定药品名称的所有相关数据（raw_docs + chunks + metadata）。
+
+        删除顺序:
+        1. drug_chunks（CASCADE 外键会自动级联删除，此处显式删除确保安全）
+        2. drug_raw_docs
+        3. drug_metadata
+
+        Args:
+            drug_name: 药品名称
+
+        Returns:
+            被删除的 doc_id 列表（用于后续 Milvus 向量清理）
+        """
+        # 先查出所有关联的 doc_id
+        sql_select = f"SELECT id FROM {self._raw_docs_table} WHERE drug_name = %s"
+        with self.conn.cursor() as cursor:
+            cursor.execute(sql_select, (drug_name,))
+            rows = cursor.fetchall()
+            doc_ids = [row["id"] for row in rows]
+
+        if not doc_ids:
+            logger.debug(f"药品 '{drug_name}' 在数据库中无记录，跳过删除")
+            return []
+
+        # 删除 chunks（按 doc_id）
+        placeholders = ", ".join(["%s"] * len(doc_ids))
+        sql_chunks = f"DELETE FROM {self._chunks_table} WHERE doc_id IN ({placeholders})"
+        with self.conn.cursor() as cursor:
+            cursor.execute(sql_chunks, doc_ids)
+
+        # 删除 raw_docs
+        sql_raw = f"DELETE FROM {self._raw_docs_table} WHERE drug_name = %s"
+        with self.conn.cursor() as cursor:
+            cursor.execute(sql_raw, (drug_name,))
+
+        # 删除 metadata（drug_metadata 有 UNIQUE 约束，单条删除）
+        sql_meta = f"DELETE FROM {self._metadata_table} WHERE drug_name = %s"
+        with self.conn.cursor() as cursor:
+            cursor.execute(sql_meta, (drug_name,))
+
+        self.conn.commit()
+        logger.info(f"药品 '{drug_name}' 已从 MySQL 删除: {len(doc_ids)} 条 raw_doc, chunks + metadata 已清理")
+        return doc_ids
+
     # ============================================================
     # drug_chunks — 文本块操作
     # ============================================================
