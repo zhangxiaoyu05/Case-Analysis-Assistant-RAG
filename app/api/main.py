@@ -64,7 +64,7 @@ async def lifespan(app: FastAPI):
 # ============================================================
 app = FastAPI(
     title="RAG 药品问答系统 API",
-    description="基于 LangChain + LangGraph + Milvus 的药品说明书智能问答服务",
+    description="基于 LangGraph + Milvus 的药品说明书智能问答服务",
     version="0.1.0",
     lifespan=lifespan,
 )
