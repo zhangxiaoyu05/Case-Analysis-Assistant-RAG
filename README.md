@@ -53,7 +53,7 @@
 
 | 模块 | 功能 |
 |------|------|
-| 意图识别 | qwen-flash，快速预判 + LLM 精确分类（drug_inquiry / chitchat / general / attack）四层防御 |
+| 意图识别 | qwen-flash，LLM 四意图分类（drug_inquiry / chitchat / general / attack），Few-shot 提示词 |
 | 混合检索 | Milvus 向量检索 + MySQL BM25 全文检索 → RRF 融合 |
 | 重排序 | qwen3-rerank，对检索结果二次排序，失败自动回退到原始排序 |
 | 答案生成 | qwen3-max，支持 4 种场景模板（默认问答 / 药品对比 / 用法用量追问 / 通用问答） |
@@ -80,7 +80,7 @@
 
 - **认证层**：JWT 登录鉴权 + bcrypt 密码哈希 + 7 天 token 有效期
 - **接口层**：API Key 鉴权（知识库管理）+ 基于 IP 的速率限制
-- **AI 层**：四层防御架构（输入检测 → 提示词加固 → 路由隔离 → 输出过滤）
+- **AI 层**：四意图分类 + 路由隔离（drug_inquiry → RAG 检索 / chitchat → 闲聊直达 / general → LLM 直接回答 / attack → 安全拒绝），Few-shot 提示词抗注入
 - **HTTP 层**：安全响应头（X-Content-Type-Options / X-Frame-Options / XSS Protection）
 - **攻击检测**：提示词注入 / 越狱 / 间接注入 / 语义诱导
 
@@ -198,7 +198,6 @@ docker exec -i rag-mysql mysql -uroot -p${MYSQL_PASSWORD} rag_pharma < scripts/m
 │   │   ├── edges.py            # 条件路由（意图路由 / 检索后路由）
 │   │   └── graph.py            # 图构建 + 编译（模块级单例）
 │   ├── offline/                # 离线入库流程
-│   │   ├── __init__.py          # Pipeline 接口
 │   │   ├── loader.py           # 文档加载器（PDF / DOCX / TXT）
 │   │   ├── cleaner.py          # 文本清洗器（规范化 + 可选脱敏）
 │   │   ├── splitter.py         # 章节感知切分器
@@ -224,7 +223,7 @@ docker exec -i rag-mysql mysql -uroot -p${MYSQL_PASSWORD} rag_pharma < scripts/m
 │   ├── config.yaml             # 业务参数（模型 / 检索 / 数据库 / 日志）
 │   └── prompts.yaml            # 提示词模板（意图 / 生成 / 脱敏 / 质量评估）
 ├── data/
-│   ├── raw/                    # 20 种药品说明书原始文件
+│   ├── raw/                    # 22 个药品说明书文件（20 个单药品 + 2 个合集）
 │   └── uploads/                # Web 上传文件暂存目录
 ├── frontend/
 │   ├── index.html              # 主应用界面（侧边栏 + 对话区）
