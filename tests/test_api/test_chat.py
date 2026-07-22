@@ -16,13 +16,17 @@ from fastapi.testclient import TestClient
 # ============================================================
 @pytest.fixture
 def client():
-    """创建带 mock 依赖的测试客户端。"""
-    # AsyncRedisHistoryManager mock（lifespan 会实例化并设置为 singleton）
+    """创建带 mock 依赖的测试客户端（含 JWT 鉴权绕过）。"""
+    import app.services.memory_manager as mm_module
+
+    # AsyncRedisHistoryManager mock
     mock_redis_hm = AsyncMock()
     mock_redis_hm.get_history.return_value = []
     mock_redis_hm.add_turn.return_value = None
     mock_redis_hm.clear_history.return_value = True
     mock_redis_hm.close = AsyncMock()
+    mock_redis_hm.get_summary = AsyncMock(return_value="")
+    mock_redis_hm.set_summary = AsyncMock()
 
     mock_compiled = MagicMock()
     mock_compiled.invoke.return_value = {
@@ -38,11 +42,21 @@ def client():
     }
 
     with patch("app.api.main.get_graph", return_value=mock_compiled), \
-         patch("app.api.main.AsyncRedisHistoryManager", return_value=mock_redis_hm):
+         patch("app.api.main.AsyncRedisHistoryManager", return_value=mock_redis_hm), \
+         patch.object(mm_module.MemoryManager, "summarize", return_value=("", [])):
         from app.api.main import app
+        from app.api.dependencies import get_current_user
+
+        # Phase 0: 绕过 JWT 鉴权，模拟已登录用户
+        app.dependency_overrides[get_current_user] = lambda: {
+            "user_id": 1,
+            "username": "testuser",
+        }
 
         with TestClient(app, raise_server_exceptions=False) as c:
             yield c
+
+    app.dependency_overrides.clear()
 
 
 # ============================================================
@@ -179,7 +193,7 @@ class TestHistoryEndpoints:
 
     @pytest.fixture
     def client_with_history(self):
-        """创建有历史数据的客户端。"""
+        """创建有历史数据的客户端（Phase 0: 含 JWT 鉴权绕过）。"""
         mock_redis_hm = AsyncMock()
         mock_redis_hm.get_history.return_value = [
             {"role": "user", "content": "阿司匹林怎么吃？",
@@ -192,13 +206,22 @@ class TestHistoryEndpoints:
         mock_redis_hm.add_turn.return_value = None
         mock_redis_hm.clear_history.return_value = True
         mock_redis_hm.close = AsyncMock()
+        mock_redis_hm.get_summary = AsyncMock(return_value="")
+        mock_redis_hm.set_summary = AsyncMock()
 
         with patch("app.api.main.get_graph"), \
              patch("app.api.main.AsyncRedisHistoryManager", return_value=mock_redis_hm):
             from app.api.main import app
+            from app.api.dependencies import get_current_user
+
+            app.dependency_overrides[get_current_user] = lambda: {
+                "user_id": 1, "username": "testuser",
+            }
 
             with TestClient(app, raise_server_exceptions=False) as c:
                 yield c, mock_redis_hm
+
+        app.dependency_overrides.clear()
 
     def test_get_history(self, client_with_history):
         """获取对话历史。"""
@@ -251,19 +274,28 @@ class TestChatStreamEndpoint:
 
     @pytest.fixture
     def stream_client(self):
-        """创建流式测试客户端。"""
+        """创建流式测试客户端（Phase 0: 含 JWT 鉴权绕过）。"""
         mock_redis_hm = AsyncMock()
         mock_redis_hm.get_history.return_value = []
         mock_redis_hm.add_turn.return_value = None
         mock_redis_hm.clear_history.return_value = True
         mock_redis_hm.close = AsyncMock()
+        mock_redis_hm.get_summary = AsyncMock(return_value="")
+        mock_redis_hm.set_summary = AsyncMock()
 
         with patch("app.api.main.get_graph"), \
              patch("app.api.main.AsyncRedisHistoryManager", return_value=mock_redis_hm):
             from app.api.main import app
+            from app.api.dependencies import get_current_user
+
+            app.dependency_overrides[get_current_user] = lambda: {
+                "user_id": 1, "username": "testuser",
+            }
 
             with TestClient(app, raise_server_exceptions=False) as c:
                 yield c
+
+        app.dependency_overrides.clear()
 
     def test_stream_returns_200(self, stream_client):
         """流式请求返回 200。"""

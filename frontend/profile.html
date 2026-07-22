@@ -1,0 +1,374 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="api-key" content="__API_KEY_PLACEHOLDER__">
+<title>个人资料 — RAG Pharma</title>
+<style>
+:root {
+  --primary: #0d9488;
+  --primary-hover: #0f766e;
+  --primary-light: #f0fdfa;
+  --primary-100: #ccfbf1;
+  --bg: #fafaf9;
+  --card: #ffffff;
+  --border: #e7e5e4;
+  --text: #1c1917;
+  --text-secondary: #78716c;
+  --text-muted: #a8a29e;
+  --danger: #ef4444;
+  --danger-bg: #fef2f2;
+  --success: #10b981;
+  --warning: #f59e0b;
+  --shadow: 0 1px 2px rgba(0,0,0,.04), 0 2px 8px rgba(0,0,0,.05);
+  --radius: 12px;
+}
+* { margin:0; padding:0; box-sizing:border-box; }
+body {
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Noto Sans SC", sans-serif;
+  background: var(--bg); color: var(--text); min-height: 100vh;
+}
+a { color: var(--primary); text-decoration: none; }
+
+/* Header */
+.header {
+  background: var(--card); border-bottom: 1px solid var(--border);
+  padding: 0 24px; height: 56px;
+  display: flex; align-items: center; justify-content: space-between;
+  box-shadow: var(--shadow); position: sticky; top: 0; z-index: 10;
+}
+.header-left { display: flex; align-items: center; gap: 12px; }
+.header-title { font-size: 16px; font-weight: 700; }
+
+/* Main */
+.main {
+  max-width: 560px; margin: 32px auto; padding: 0 16px;
+}
+
+/* Card */
+.card {
+  background: var(--card); border-radius: var(--radius);
+  box-shadow: var(--shadow); padding: 24px; margin-bottom: 16px;
+}
+.card-title {
+  font-size: 14px; font-weight: 600; margin-bottom: 16px;
+  padding-bottom: 12px; border-bottom: 1px solid var(--border);
+  color: var(--text-secondary);
+}
+
+/* Avatar */
+.avatar-section {
+  display: flex; align-items: center; gap: 16px; margin-bottom: 20px;
+}
+.avatar-circle {
+  width: 56px; height: 56px; border-radius: 14px;
+  background: var(--primary); color: #fff;
+  display: flex; align-items: center; justify-content: center;
+  font-size: 24px; font-weight: 700;
+  flex-shrink: 0;
+}
+.avatar-info .username { font-size: 16px; font-weight: 600; }
+.avatar-info .user-id {
+  font-size: 12px; color: var(--text-muted); margin-top: 2px;
+}
+
+/* Form row */
+.form-row {
+  display: flex; align-items: center; gap: 10px; margin-bottom: 12px;
+}
+.form-row:last-child { margin-bottom: 0; }
+.form-label {
+  font-size: 13px; color: var(--text-secondary); min-width: 72px;
+  flex-shrink: 0;
+}
+.form-input {
+  flex: 1; border: 1px solid var(--border); border-radius: 8px;
+  padding: 8px 12px; font-size: 14px; outline: none; color: var(--text);
+  transition: .15s; background: var(--bg);
+}
+.form-input:focus { border-color: var(--primary); box-shadow: 0 0 0 3px var(--primary-light); }
+
+/* Buttons */
+.btn {
+  border: none; border-radius: 8px; padding: 8px 16px;
+  font-size: 13px; font-weight: 500; cursor: pointer;
+  transition: .15s; white-space: nowrap; flex-shrink: 0;
+}
+.btn-primary { background: var(--primary); color: #fff; }
+.btn-primary:hover { background: var(--primary-hover); }
+.btn-danger { background: transparent; color: var(--danger); }
+.btn-danger:hover { background: var(--danger-bg); }
+.btn-back {
+  background: transparent; border: 1px solid var(--border);
+  color: var(--text-secondary); padding: 6px 12px; border-radius: 8px;
+  font-size: 13px; cursor: pointer; transition: .15s;
+}
+.btn-back:hover { background: var(--bg); }
+
+/* Confidence badge */
+.conf-badge {
+  display: inline-block; width: 8px; height: 8px; border-radius: 50%;
+  margin-right: 6px; flex-shrink: 0;
+}
+.conf-high { background: var(--success); }
+.conf-mid { background: var(--warning); }
+.conf-low { background: var(--danger); }
+
+/* Toast */
+.toast-container {
+  position: fixed; top: 20px; right: 20px; z-index: 9999;
+  display: flex; flex-direction: column; gap: 8px;
+}
+.toast {
+  background: var(--card); padding: 12px 20px; border-radius: 10px;
+  box-shadow: 0 4px 16px rgba(0,0,0,.12); font-size: 13px;
+  max-width: 360px; animation: fadeIn .3s;
+}
+.toast.success { border-left: 3px solid var(--success); }
+.toast.error { border-left: 3px solid var(--danger); color: var(--danger); }
+@keyframes fadeIn { from{opacity:0;transform:translateY(-8px)} to{opacity:1;transform:translateY(0)} }
+
+/* Loading */
+.loading { text-align: center; color: var(--text-muted); padding: 40px 0; font-size: 14px; }
+
+/* Empty state */
+.field-empty { color: var(--text-muted); font-size: 13px; font-style: italic; }
+
+/* Footer */
+.footer {
+  text-align: center; padding: 16px; margin-top: 8px;
+}
+</style>
+</head>
+<body>
+
+<!-- Header -->
+<div class="header">
+  <div class="header-left">
+    <button class="btn-back" onclick="window.location.href='/app'">← 返回</button>
+    <span class="header-title">个人资料</span>
+  </div>
+  <button class="btn btn-danger" onclick="logout()">退出登录</button>
+</div>
+
+<!-- Main -->
+<div class="main">
+  <!-- Card 1: Basic Settings -->
+  <div class="card">
+    <div class="card-title">👤 基本信息</div>
+    <div id="avatarSection" class="loading">加载中…</div>
+    <div class="form-row">
+      <span class="form-label">昵称</span>
+      <input class="form-input" id="nicknameInput" type="text"
+             maxlength="100" placeholder="设置昵称后侧边栏将显示昵称">
+      <button class="btn btn-primary" onclick="saveNickname()">保存</button>
+    </div>
+  </div>
+
+  <!-- Card 2: User Profile Fields -->
+  <div class="card">
+    <div class="card-title">📋 个人画像</div>
+    <p style="font-size:12px;color:var(--text-muted);margin-bottom:16px">
+      这些信息由 AI 自动从对话中提取，也可以手动编辑。修改后将用于个性化问答。
+    </p>
+    <div id="profileFields"><div class="loading">加载中…</div></div>
+  </div>
+
+  <div class="footer">
+    <a href="/manage">⚙ 知识库管理</a>
+  </div>
+</div>
+
+<!-- Toast -->
+<div class="toast-container" id="toastContainer"></div>
+
+<script>
+// ============================================================
+// Auth & API
+// ============================================================
+const TOKEN = localStorage.getItem('rag_token');
+if (!TOKEN) { window.location.href = '/login'; }
+
+const API_BASE = '/api/v1';
+
+async function api(path, method = 'GET', body = null) {
+  const opts = {
+    method,
+    headers: {
+      'Content-Type': 'application/json',
+      'Authorization': `Bearer ${TOKEN}`,
+    },
+  };
+  if (body) { opts.body = JSON.stringify(body); }
+  const res = await fetch(`${API_BASE}${path}`, opts);
+  if (res.status === 401) {
+    localStorage.clear();
+    window.location.href = '/login';
+    return;
+  }
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.detail || `请求失败 (${res.status})`);
+  }
+  return res.json();
+}
+
+// ============================================================
+// Toast
+// ============================================================
+function showToast(msg, type = 'success') {
+  const container = document.getElementById('toastContainer');
+  const el = document.createElement('div');
+  el.className = `toast ${type}`;
+  el.textContent = msg;
+  container.appendChild(el);
+  setTimeout(() => { el.style.opacity = '0'; el.style.transition = '.3s'; setTimeout(() => el.remove(), 300); }, 3000);
+}
+
+// ============================================================
+// Load & Render
+// ============================================================
+let currentSettings = null;
+let currentProfile = {};
+let validFields = [];
+
+async function loadAll() {
+  try {
+    const [settings, profileData] = await Promise.all([
+      api('/user/settings'),
+      api('/user/profile'),
+    ]);
+    currentSettings = settings;
+    currentProfile = profileData.profile || {};
+    validFields = profileData.valid_fields || [];
+    renderAvatar(settings);
+    renderNickname(settings);
+    renderProfileFields(currentProfile, validFields);
+  } catch (err) {
+    showToast('加载失败: ' + err.message, 'error');
+  }
+}
+
+function renderAvatar(settings) {
+  const displayName = settings.display_name || settings.username;
+  const initial = displayName.charAt(0).toUpperCase();
+  document.getElementById('avatarSection').innerHTML = `
+    <div class="avatar-section">
+      <div class="avatar-circle">${escapeHtml(initial)}</div>
+      <div class="avatar-info">
+        <div class="username">${escapeHtml(settings.username)}</div>
+        <div class="user-id">ID: ${settings.user_id}</div>
+      </div>
+    </div>
+  `;
+}
+
+function renderNickname(settings) {
+  document.getElementById('nicknameInput').value = settings.display_name || '';
+}
+
+function renderProfileFields(profile, validFields) {
+  const container = document.getElementById('profileFields');
+  if (validFields.length === 0) {
+    container.innerHTML = '<div class="field-empty">暂无可编辑的画像字段</div>';
+    return;
+  }
+
+  container.innerHTML = validFields.map(f => {
+    const data = profile[f.field_name];
+    const value = data ? data.field_value : '';
+    const confidence = data ? data.confidence : 0;
+    let badgeClass = 'conf-low';
+    if (confidence >= 0.7) badgeClass = 'conf-high';
+    else if (confidence >= 0.5) badgeClass = 'conf-mid';
+
+    return `
+      <div class="form-row" data-field="${f.field_name}">
+        <span class="form-label">
+          ${confidence > 0 ? `<span class="conf-badge ${badgeClass}" title="置信度: ${Math.round(confidence*100)}%"></span>` : ''}
+          ${escapeHtml(f.label)}
+        </span>
+        <input class="form-input" type="text" maxlength="500"
+               value="${escapeHtml(value)}"
+               placeholder="${value ? '' : '未设置'}">
+        <button class="btn btn-primary" onclick="saveField('${f.field_name}', this.parentElement)">保存</button>
+        ${value ? `<button class="btn btn-danger" onclick="deleteField('${f.field_name}')">×</button>` : ''}
+      </div>
+    `;
+  }).join('');
+}
+
+// ============================================================
+// Actions
+// ============================================================
+async function saveNickname() {
+  const input = document.getElementById('nicknameInput');
+  const newName = input.value.trim() || null;
+  const payload = { display_name: newName };
+  try {
+    const settings = await api('/user/settings', 'PUT', payload);
+    currentSettings = settings;
+    localStorage.setItem('rag_display_name', newName || '');
+    renderAvatar(settings);
+    renderNickname(settings);
+    showToast('昵称已更新');
+  } catch (err) {
+    showToast('保存失败: ' + err.message, 'error');
+  }
+}
+
+async function saveField(fieldName, rowEl) {
+  const input = rowEl.querySelector('input');
+  const value = input.value.trim();
+  try {
+    const result = await api('/user/profile', 'PUT', {
+      fields: [{ field_name: fieldName, field_value: value, confidence: 1.0 }],
+    });
+    showToast(value ? '已保存' : '已清除');
+    // Reload profile data
+    const profileData = await api('/user/profile');
+    currentProfile = profileData.profile || {};
+    renderProfileFields(currentProfile, validFields);
+  } catch (err) {
+    showToast('保存失败: ' + err.message, 'error');
+  }
+}
+
+async function deleteField(fieldName) {
+  try {
+    await api(`/user/profile/${fieldName}`, 'DELETE');
+    showToast('已删除');
+    const profileData = await api('/user/profile');
+    currentProfile = profileData.profile || {};
+    renderProfileFields(currentProfile, validFields);
+  } catch (err) {
+    showToast('删除失败: ' + err.message, 'error');
+  }
+}
+
+function logout() {
+  localStorage.removeItem('rag_token');
+  localStorage.removeItem('rag_username');
+  localStorage.removeItem('rag_user_id');
+  localStorage.removeItem('rag_display_name');
+  window.location.href = '/login';
+}
+
+// ============================================================
+// Helpers
+// ============================================================
+function escapeHtml(s) {
+  const div = document.createElement('div');
+  div.textContent = String(s);
+  return div.innerHTML;
+}
+
+// ============================================================
+// Init
+// ============================================================
+loadAll();
+</script>
+
+</body>
+</html>

@@ -1,12 +1,17 @@
 """
 测试 app.services.memory_manager — 对话摘要与短期记忆
 
-覆盖: MemoryManager.summarize, _fallback_summary, _format_turns
+Phase 1: 更新为 token 阈值触发逻辑。
+覆盖: MemoryManager.summarize, _fallback_summary, _format_turns, estimate_tokens
 """
 
 import pytest
 
-from app.services.memory_manager import MemoryManager
+from app.services.memory_manager import (
+    MemoryManager,
+    estimate_tokens,
+    estimate_tokens_for_messages,
+)
 
 
 # ============================================================
@@ -40,9 +45,9 @@ class TestMemoryManagerInit:
     """测试 MemoryManager 初始化。"""
 
     def test_default_recent_turns(self):
-        """默认保留 4 轮。"""
+        """默认保留轮数从 config 读取。"""
         manager = MemoryManager()
-        assert manager._recent_turns == 4
+        assert manager._recent_turns >= 1
 
     def test_custom_recent_turns(self):
         """自定义保留轮数。"""
@@ -59,75 +64,157 @@ class TestMemoryManagerInit:
         manager = MemoryManager(model="qwen-plus")
         assert manager._model == "qwen-plus"
 
+    def test_custom_threshold(self):
+        """自定义 token 阈值参数。"""
+        manager = MemoryManager(threshold_ratio=0.5, context_window_tokens=1000)
+        assert manager._threshold_ratio == 0.5
+        assert manager._context_window == 1000
+
 
 # ============================================================
 # summarize — 不触发摘要
 # ============================================================
 class TestSummarizeNoTrigger:
-    """历史不足时不应触发摘要。"""
+    """token 数未超过阈值时不应触发摘要。"""
 
     @pytest.mark.asyncio
     async def test_empty_history(self):
         """空历史返回空摘要。"""
-        manager = MemoryManager(recent_turns=4)
+        manager = MemoryManager()
         summary, recent = await manager.summarize([], "")
         assert summary == ""
         assert recent == []
 
     @pytest.mark.asyncio
     async def test_short_history_no_summary(self):
-        """2轮历史 ≤ 4轮阈值，不触发摘要。"""
-        manager = MemoryManager(recent_turns=4)
+        """短历史 token 数远低于阈值，不触发摘要。"""
+        manager = MemoryManager()
         summary, recent = await manager.summarize(SHORT_HISTORY, "")
         assert summary == ""
         assert recent == SHORT_HISTORY  # 原样返回
 
     @pytest.mark.asyncio
-    async def test_exact_threshold_no_summary(self):
-        """恰好等于阈值，不触发摘要。"""
-        manager = MemoryManager(recent_turns=2)
-        # 2轮 = 4条消息，阈值是 2*2=4
-        history = SHORT_HISTORY  # 4 条消息
-        summary, recent = await manager.summarize(history, "")
+    async def test_below_threshold_no_summary(self):
+        """LONG_HISTORY 默认 token 数低于默认阈值 (8192*0.7=5734)，不触发。"""
+        manager = MemoryManager()
+        summary, recent = await manager.summarize(LONG_HISTORY, "")
+        # 默认 token 阈值很高 (5734)，12 条短消息不会触发
         assert summary == ""
-        assert recent == history
+        assert recent == LONG_HISTORY
+
+    @pytest.mark.asyncio
+    async def test_memory_disabled_global(self):
+        """全局禁用记忆时返回空历史。"""
+        manager = MemoryManager()
+        summary, recent = await manager.summarize(
+            LONG_HISTORY, "", enable_memory=False
+        )
+        assert summary == ""
+        assert recent == []
+
+    @pytest.mark.asyncio
+    async def test_memory_disabled_returns_empty(self):
+        """enable_memory=False 时跳过所有记忆处理。"""
+        manager = MemoryManager(threshold_ratio=0.01, context_window_tokens=100)
+        summary, recent = await manager.summarize(
+            LONG_HISTORY, "", query="测试", enable_memory=False
+        )
+        assert summary == ""
+        assert recent == []
 
 
 # ============================================================
 # summarize — 触发摘要（使用回退，避免调用真实 API）
 # ============================================================
 class TestSummarizeTriggered:
-    """历史超过阈值时触发摘要。"""
+    """token 超过阈值时触发摘要（低阈值强制触发）。"""
 
     @pytest.mark.asyncio
     async def test_long_history_triggers_summary(self):
-        """12条历史 > 4轮(8条)阈值，触发摘要。"""
-        manager = MemoryManager(recent_turns=4)
+        """低阈值下 LONG_HISTORY 触发摘要。"""
+        manager = MemoryManager(
+            recent_turns=4,
+            threshold_ratio=0.01,
+            context_window_tokens=100,
+        )
         summary, recent = await manager.summarize(LONG_HISTORY, "")
         # 回退摘要包含用户问题
         assert summary != ""
         assert "阿司匹林" in summary
-        # 最近4轮(8条)被保留
-        assert len(recent) == 8
+        # 至少保留 2 轮（4条）最近消息
+        assert len(recent) >= 4
         # 最近一条是最后一条 assistant 消息
         assert recent[-1]["content"] == "不客气！"
 
     @pytest.mark.asyncio
     async def test_recent_turns_custom(self):
-        """自定义保留 2 轮。"""
-        manager = MemoryManager(recent_turns=2)
+        """自定义保留轮数 + 低阈值触发摘要。"""
+        manager = MemoryManager(
+            recent_turns=2,
+            threshold_ratio=0.01,
+            context_window_tokens=100,
+        )
         summary, recent = await manager.summarize(LONG_HISTORY, "")
         assert summary != ""
-        assert len(recent) == 4  # 2轮 × 2条
+        assert len(recent) >= 2  # 至少保留 1 轮
 
     @pytest.mark.asyncio
     async def test_existing_summary_merged(self):
-        """已有摘要应与新摘要合并。"""
-        manager = MemoryManager(recent_turns=2)
+        """已有摘要应与新摘要合并（前序摘要被保留）。"""
+        manager = MemoryManager(
+            recent_turns=2,
+            threshold_ratio=0.01,
+            context_window_tokens=100,
+        )
         existing = "用户曾询问过阿司匹林的用法用量。"
         summary, recent = await manager.summarize(LONG_HISTORY, existing)
         assert existing in summary  # 前序摘要被保留
-        assert len(recent) == 4
+
+    @pytest.mark.asyncio
+    async def test_summary_with_query(self):
+        """query 也计入 token 估算。"""
+        manager = MemoryManager(
+            threshold_ratio=0.01,
+            context_window_tokens=100,
+        )
+        summary, _ = await manager.summarize(
+            LONG_HISTORY, "", query="阿司匹林和阿莫西林一起吃可以吗？"
+        )
+        assert summary != ""  # 仍然触发（query 增加了 token 数）
+
+
+# ============================================================
+# Token 估算
+# ============================================================
+class TestTokenEstimation:
+    """测试 token 估算函数。"""
+
+    def test_empty_text(self):
+        """空文本返回 0。"""
+        assert estimate_tokens("") == 0
+
+    def test_chinese_text(self):
+        """中文文本估算。"""
+        tokens = estimate_tokens("阿司匹林是一种解热镇痛药")
+        assert tokens > 0
+        assert tokens < 50  # 短文本不应产生大量 token
+
+    def test_english_text(self):
+        """英文文本估算。"""
+        tokens = estimate_tokens("Aspirin is a pain reliever")
+        assert tokens > 0
+        assert tokens < 20
+
+    def test_estimate_messages(self):
+        """消息列表估算。"""
+        tokens = estimate_tokens_for_messages(SHORT_HISTORY)
+        assert tokens > 0
+
+    def test_estimate_long_history(self):
+        """LONG_HISTORY token 估算。"""
+        tokens = estimate_tokens_for_messages(LONG_HISTORY)
+        # 12 条中文短消息 token 数应远小于默认阈值
+        assert tokens < 1000
 
 
 # ============================================================

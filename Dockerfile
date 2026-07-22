@@ -36,6 +36,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 COPY app/ ./app/
 COPY config/ ./config/
 COPY scripts/ ./scripts/
+COPY frontend/ ./frontend/
 
 # 创建非 root 用户（安全加固）
 RUN useradd --create-home --shell /bin/bash appuser && \

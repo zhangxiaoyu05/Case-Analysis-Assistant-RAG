@@ -142,6 +142,8 @@ def generate_node(state: RagState) -> dict:
     ranked_docs = state.get("ranked_docs", [])
     history = state.get("history")
     memory_summary = state.get("memory_summary", "")
+    user_memories = state.get("user_memories", "")
+    user_profile = state.get("user_profile", "")
 
     if not ranked_docs:
         logger.warning("无参考文档，生成兜底回答")
@@ -164,6 +166,8 @@ def generate_node(state: RagState) -> dict:
             context_docs=ranked_docs,
             history=history,
             memory_summary=memory_summary,
+            user_memories=user_memories,
+            user_profile=user_profile,
         )
         logger.info(
             f"答案生成完成: len={len(result.answer)}, template={result.template_used}"
@@ -267,6 +271,8 @@ def general_node(state: RagState) -> dict:
     query = state.get("query", "").strip()
     memory_summary = state.get("memory_summary", "")
     history = state.get("history")
+    user_memories = state.get("user_memories", "")
+    user_profile = state.get("user_profile", "")
     logger.info(f"通用问答: {query[:60]}")
 
     try:
@@ -277,6 +283,8 @@ def general_node(state: RagState) -> dict:
             template="general",
             history=history,
             memory_summary=memory_summary,
+            user_memories=user_memories,
+            user_profile=user_profile,
         )
         return {
             "answer": result.answer,

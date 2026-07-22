@@ -113,6 +113,8 @@ class Generator:
         history: list[dict] | None = None,
         template: str | None = None,
         memory_summary: str = "",
+        user_memories: str = "",
+        user_profile: str = "",
     ) -> GeneratedAnswer:
         """
         生成药品知识回答。
@@ -127,7 +129,9 @@ class Generator:
             history: 对话历史 [{"role": "user/assistant", "content": "..."}]
             template: 指定提示词模板（"default" / "comparison" / "dosage_followup"）
                       不传则自动检测
-            memory_summary: 早期对话的累积摘要（由 MemoryManager 生成）
+            memory_summary: 早期对话的累积摘要（Phase 1 短期记忆）
+            user_memories: 跨会话用户中期记忆文本（Phase 2）
+            user_profile: 用户画像文本（Phase 3 长期记忆）
 
         Returns:
             GeneratedAnswer — answer 为生成的回答文本
@@ -151,7 +155,7 @@ class Generator:
         # 构建 system + user messages
         system_prompt = self._get_system_prompt(template)
         user_prompt = self._get_user_prompt(
-            template, context_text, query, history, memory_summary
+            template, context_text, query, history, memory_summary, user_memories, user_profile
         )
 
         logger.info(
@@ -273,6 +277,8 @@ class Generator:
         query: str,
         history: list[dict] | None = None,
         memory_summary: str = "",
+        user_memories: str = "",
+        user_profile: str = "",
     ) -> str:
         """获取指定模板的 user prompt（填充变量）"""
         template_map = {
@@ -295,10 +301,16 @@ class Generator:
                 history_parts.append(f"{role}: {content}")
             history_text = "近期对话：\n" + "\n".join(history_parts)
 
-        # 格式化记忆摘要（长期记忆）
+        # 格式化记忆摘要（短期记忆）
         memory_text = ""
         if memory_summary:
             memory_text = f"前序对话摘要：\n{memory_summary}\n"
+
+        # 中期记忆文本直接使用（UserMemoryManager 已格式化）
+        user_memories_text = user_memories or ""
+
+        # 用户画像文本直接使用（UserProfileManager 已格式化）
+        user_profile_text = user_profile or ""
 
         # 填充模板变量
         return template_text.format(
@@ -306,6 +318,8 @@ class Generator:
             question=query,
             history=history_text,
             memory_summary=memory_text,
+            user_memories=user_memories_text,
+            user_profile=user_profile_text,
         )
 
     # ----------------------------------------------------------
@@ -378,6 +392,8 @@ class Generator:
         history: list[dict] | None = None,
         template: str | None = None,
         memory_summary: str = "",
+        user_memories: str = "",
+        user_profile: str = "",
     ):
         """
         流式版本：逐 token yield 生成结果（用于 SSE）。
@@ -390,7 +406,9 @@ class Generator:
             context_docs: 检索到的参考文档列表
             history: 对话历史
             template: 提示词模板（不传则自动检测）
-            memory_summary: 早期对话的累积摘要
+            memory_summary: 早期对话的累积摘要（Phase 1）
+            user_memories: 跨会话用户中期记忆文本（Phase 2）
+            user_profile: 用户画像文本（Phase 3 长期记忆）
 
         Yields:
             str — 每次产出一个增量 token 文本
@@ -403,7 +421,7 @@ class Generator:
         context_text = self._format_context(context_docs)
         system_prompt = self._get_system_prompt(template)
         user_prompt = self._get_user_prompt(
-            template, context_text, query, history, memory_summary
+            template, context_text, query, history, memory_summary, user_memories, user_profile
         )
 
         messages = [

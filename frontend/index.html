@@ -1,0 +1,1100 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="api-key" content="__API_KEY_PLACEHOLDER__">
+<title>药品知识问答 — RAG Pharma</title>
+<style>
+/* ============================================================
+   CSS Variables — Botanical warm theme
+   ============================================================ */
+:root {
+  --primary: #0d9488;
+  --primary-hover: #0f766e;
+  --primary-light: #f0fdfa;
+  --primary-100: #ccfbf1;
+  --bg: #fafaf9;
+  --card: #ffffff;
+  --border: #e7e5e4;
+  --text: #1c1917;
+  --text-secondary: #78716c;
+  --text-muted: #a8a29e;
+  --danger: #ef4444;
+  --danger-bg: #fef2f2;
+  --success: #10b981;
+  --warning: #f59e0b;
+  --source-bg: #fafaf9;
+  --shadow: 0 1px 2px rgba(0,0,0,.04), 0 2px 8px rgba(0,0,0,.05);
+  --radius: 12px;
+}
+
+* { margin: 0; padding: 0; box-sizing: border-box; }
+
+body {
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC",
+    "Microsoft YaHei", "Helvetica Neue", sans-serif;
+  background: var(--bg);
+  color: var(--text);
+  height: 100vh;
+  display: flex;
+  overflow: hidden;
+}
+
+/* ============================================================
+   Sidebar (left)
+   ============================================================ */
+.sidebar {
+  width: 280px; min-width: 280px;
+  height: 100vh;
+  background: var(--card);
+  border-right: 1px solid var(--border);
+  display: flex; flex-direction: column;
+  flex-shrink: 0;
+}
+
+.sidebar-header {
+  padding: 16px;
+  display: flex; align-items: center; justify-content: space-between;
+  border-bottom: 1px solid var(--border);
+}
+
+.sidebar-user {
+  display: flex; align-items: center; gap: 8px;
+  font-size: 13px; color: var(--text-secondary);
+  cursor: pointer; padding: 4px 8px; border-radius: 8px; transition: .15s;
+}
+.sidebar-user:hover { background: var(--primary-light); }
+
+.sidebar-user-avatar {
+  width: 28px; height: 28px;
+  border-radius: 8px;
+  background: var(--primary);
+  color: #fff;
+  display: flex; align-items: center; justify-content: center;
+  font-size: 13px; font-weight: 600;
+}
+
+.sidebar-actions { display: flex; gap: 6px; }
+
+.btn-icon {
+  width: 32px; height: 32px;
+  border-radius: 6px; border: 1px solid var(--border);
+  background: var(--card); color: var(--text-secondary);
+  cursor: pointer; display: flex; align-items: center; justify-content: center;
+  font-size: 16px; transition: .15s;
+}
+
+.btn-icon:hover { background: var(--primary-light); color: var(--primary); border-color: var(--primary); }
+
+.btn-new-chat {
+  margin: 12px 16px;
+  padding: 9px 0;
+  border-radius: 8px;
+  border: 1px dashed var(--border);
+  background: transparent;
+  color: var(--text-secondary);
+  cursor: pointer;
+  font-size: 13px; font-family: inherit;
+  display: flex; align-items: center; justify-content: center; gap: 5px;
+  transition: .15s;
+}
+
+.btn-new-chat:hover { background: var(--primary-light); color: var(--primary); border-color: var(--primary); }
+
+/* Conversation list */
+.conv-list {
+  flex: 1; overflow-y: auto;
+  padding: 4px 12px;
+}
+
+.conv-item {
+  display: flex; align-items: center;
+  padding: 10px 12px;
+  border-radius: 8px;
+  cursor: pointer;
+  transition: .12s;
+  margin-bottom: 2px;
+  font-size: 13px; color: var(--text);
+  position: relative;
+  gap: 8px;
+}
+
+.conv-item:hover { background: var(--bg); }
+
+.conv-item.active { background: var(--primary-light); color: var(--primary); font-weight: 500; }
+
+.conv-item-title {
+  flex: 1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+
+.conv-item-del {
+  opacity: 0; font-size: 14px; color: var(--text-muted);
+  cursor: pointer; flex-shrink: 0;
+  padding: 2px 4px; border-radius: 4px;
+  transition: .12s;
+}
+
+.conv-item:hover .conv-item-del { opacity: 1; }
+.conv-item-del:hover { color: var(--danger); background: var(--danger-bg); }
+
+.conv-empty {
+  text-align: center; padding: 32px 16px;
+  font-size: 13px; color: var(--text-muted);
+}
+
+/* Sidebar footer */
+.sidebar-footer {
+  padding: 12px 16px;
+  border-top: 1px solid var(--border);
+  display: flex; justify-content: space-between;
+}
+
+.btn-sidebar-footer {
+  font-size: 12px; color: var(--text-muted);
+  background: none; border: none; cursor: pointer;
+  padding: 4px 8px; border-radius: 6px;
+  font-family: inherit; transition: .15s;
+}
+
+.btn-sidebar-footer:hover { color: var(--danger); background: var(--danger-bg); }
+
+/* ============================================================
+   Main Content (right)
+   ============================================================ */
+.main-content {
+  flex: 1; display: flex; flex-direction: column;
+  height: 100vh; overflow: hidden;
+}
+
+/* Header */
+.chat-header {
+  padding: 12px 24px;
+  border-bottom: 1px solid var(--border);
+  display: flex; align-items: center; justify-content: space-between;
+  flex-shrink: 0;
+  background: var(--card);
+}
+
+.chat-title {
+  font-size: 15px; font-weight: 600;
+  border: none; background: transparent;
+  color: var(--text); font-family: inherit;
+  outline: none; max-width: 400px;
+}
+
+.chat-title:focus {
+  border-bottom: 2px solid var(--primary);
+}
+
+.chat-title::placeholder { color: var(--text-muted); }
+
+.chat-header-right { display: flex; gap: 8px; align-items: center; }
+
+/* Messages */
+.chat-messages {
+  flex: 1; overflow-y: auto;
+  padding: 8px 24px 20px;
+  display: flex; flex-direction: column; gap: 20px;
+}
+
+.empty-state {
+  flex: 1; display: flex; flex-direction: column; align-items: center;
+  justify-content: center; text-align: center; padding: 40px 20px;
+}
+
+.empty-state .icon { font-size: 56px; margin-bottom: 16px; }
+
+.empty-state h2 { font-size: 20px; font-weight: 600; margin-bottom: 6px; color: var(--text); }
+
+.empty-state p { font-size: 14px; color: var(--text-muted); max-width: 360px; line-height: 1.6; }
+
+/* Message bubbles */
+.message {
+  display: flex; gap: 12px;
+  max-width: 85%;
+}
+
+.message.user { align-self: flex-end; flex-direction: row-reverse; }
+
+.message.assistant { align-self: flex-start; }
+
+.msg-avatar {
+  width: 32px; height: 32px; border-radius: 8px;
+  display: flex; align-items: center; justify-content: center;
+  font-size: 15px; flex-shrink: 0;
+}
+
+.message.user .msg-avatar { background: var(--primary-100); }
+
+.message.assistant .msg-avatar { background: var(--primary); color: #fff; }
+
+.msg-bubble {
+  padding: 12px 16px;
+  border-radius: 12px;
+  font-size: 14px; line-height: 1.65;
+  overflow-wrap: break-word;
+}
+
+.message.user .msg-bubble {
+  background: var(--primary); color: #fff;
+  border-bottom-right-radius: 4px;
+}
+
+.message.assistant .msg-bubble {
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-bottom-left-radius: 4px;
+}
+
+/* Markdown in assistant messages */
+	.msg-bubble h2 { font-size: 16px; font-weight: 700; margin: 14px 0 6px; color: var(--text); }
+	.msg-bubble h3 { font-size: 15px; font-weight: 600; margin: 12px 0 6px; color: var(--text); }
+	.msg-bubble h4, .msg-bubble h5, .msg-bubble h6 { font-size: 14px; font-weight: 600; margin: 10px 0 4px; }
+.msg-bubble h3:first-child { margin-top: 0; }
+.msg-bubble ul, .msg-bubble ol { padding-left: 20px; margin: 6px 0; }
+.msg-bubble li { margin-bottom: 2px; }
+.msg-bubble p { margin: 6px 0; }
+.msg-bubble strong { font-weight: 600; }
+
+/* Horizontal rule */
+.msg-bubble hr { border: none; border-top: 1px solid var(--border); margin: 14px 0; }
+
+/* Blockquote */
+.msg-bubble blockquote {
+  border-left: 3px solid var(--primary); padding: 6px 12px; margin: 8px 0;
+  background: var(--primary-light); border-radius: 0 8px 8px 0; color: var(--text-secondary);
+}
+.msg-bubble blockquote p { margin: 0; }
+
+/* Inline code */
+.msg-bubble code {
+  background: var(--primary-100); color: var(--primary-hover);
+  padding: 1px 6px; border-radius: 4px; font-size: 13px; font-family: "SF Mono", "Fira Code", "Cascadia Code", monospace;
+}
+
+/* Table */
+.table-wrapper { overflow-x: auto; margin: 10px 0; }
+.msg-bubble table {
+  width: 100%; border-collapse: collapse; font-size: 13px;
+}
+.msg-bubble thead th {
+  background: var(--primary-light); color: var(--primary-hover); font-weight: 600;
+  padding: 8px 12px; text-align: left; border-bottom: 2px solid var(--primary);
+  white-space: nowrap;
+}
+.msg-bubble tbody td {
+  padding: 7px 12px; border-bottom: 1px solid var(--border);
+}
+.msg-bubble tbody tr:hover { background: #fafaf9; }
+
+/* Sources */
+.sources-section {
+  margin-top: 10px; padding-top: 10px;
+  border-top: 1px solid var(--border);
+  font-size: 12px; color: var(--text-muted);
+}
+
+.sources-toggle {
+  cursor: pointer; font-weight: 500; color: var(--primary);
+  border: none; background: none; font-family: inherit; font-size: 12px;
+}
+
+.sources-list { display: none; margin-top: 8px; }
+
+.sources-list.show { display: block; }
+
+.source-item {
+  background: var(--source-bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 8px 12px;
+  margin-bottom: 6px;
+  font-size: 12px; line-height: 1.5;
+}
+
+.source-item .src-drug {
+  font-weight: 600; color: var(--primary);
+}
+
+.source-item .src-section {
+  color: var(--text-secondary); margin-left: 6px;
+}
+
+/* Loading dots */
+.loading-dots {
+  display: flex; gap: 4px; padding: 4px 0;
+}
+
+.loading-dots span {
+  width: 6px; height: 6px; border-radius: 50%;
+  background: var(--text-muted); animation: dot 1.4s infinite;
+}
+
+.loading-dots span:nth-child(2) { animation-delay: .2s; }
+.loading-dots span:nth-child(3) { animation-delay: .4s; }
+
+@keyframes dot {
+  0%, 80%, 100% { transform: scale(.6); opacity: .4; }
+  40% { transform: scale(1); opacity: 1; }
+}
+
+/* Input Area */
+.chat-input-area {
+  padding: 12px 24px 16px;
+  background: var(--card);
+  border-top: 1px solid var(--border);
+  flex-shrink: 0;
+}
+
+.input-row {
+  display: flex; gap: 10px; align-items: flex-end;
+}
+
+.input-wrapper {
+  flex: 1; position: relative;
+}
+
+.input-wrapper textarea {
+  width: 100%;
+  padding: 10px 14px; padding-right: 40px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  font-size: 14px; font-family: inherit;
+  resize: none; outline: none;
+  color: var(--text); background: var(--bg);
+  line-height: 1.5;
+  max-height: 120px;
+  transition: border-color .15s;
+}
+
+.input-wrapper textarea:focus {
+  border-color: var(--primary);
+  box-shadow: 0 0 0 3px var(--primary-light);
+}
+
+.memory-toggle {
+  display: flex; align-items: center; gap: 6px;
+  font-size: 11px; color: var(--text-muted);
+  margin-top: 6px;
+  cursor: pointer; user-select: none;
+}
+
+.memory-toggle input { display: none; }
+
+.toggle-track {
+  width: 28px; height: 16px;
+  background: var(--border); border-radius: 8px;
+  position: relative; transition: .2s;
+}
+
+.toggle-track::after {
+  content: '';
+  position: absolute; top: 2px; left: 2px;
+  width: 12px; height: 12px;
+  background: #fff; border-radius: 50%;
+  transition: .2s;
+}
+
+.memory-toggle input:checked + .toggle-track {
+  background: var(--primary);
+}
+
+.memory-toggle input:checked + .toggle-track::after {
+  left: 14px;
+}
+
+.btn-send {
+  width: 40px; height: 40px;
+  border-radius: 10px;
+  border: none; background: var(--primary); color: #fff;
+  font-size: 18px; cursor: pointer;
+  display: flex; align-items: center; justify-content: center;
+  transition: .15s; flex-shrink: 0;
+}
+
+.btn-send:hover { background: var(--primary-hover); }
+.btn-send:disabled { opacity: .4; cursor: not-allowed; }
+
+/* Unauthenticated state */
+.unauth-overlay {
+  position: fixed; top: 0; left: 0; right: 0; bottom: 0;
+  background: var(--bg);
+  display: flex; align-items: center; justify-content: center;
+  z-index: 999;
+}
+
+.unauth-box {
+  text-align: center;
+}
+
+.unauth-box .icon { font-size: 48px; margin-bottom: 12px; }
+
+.unauth-box h2 { font-size: 18px; margin-bottom: 6px; }
+
+.unauth-box p { font-size: 13px; color: var(--text-muted); margin-bottom: 16px; }
+
+/* Toast */
+.toast {
+  position: fixed; top: 20px; right: 20px;
+  padding: 10px 18px;
+  border-radius: 8px;
+  font-size: 13px;
+  color: #fff;
+  z-index: 1000;
+  animation: slideIn .25s ease;
+  box-shadow: 0 4px 12px rgba(0,0,0,.15);
+}
+
+.toast.error { background: var(--danger); }
+.toast.success { background: var(--success); }
+
+@keyframes slideIn {
+  from { transform: translateX(100%); opacity: 0; }
+  to { transform: translateX(0); opacity: 1; }
+}
+</style>
+</head>
+<body>
+
+<!-- ============================================================
+     Sidebar
+     ============================================================ -->
+<aside class="sidebar" id="sidebar">
+  <div class="sidebar-header">
+    <div class="sidebar-user" onclick="window.location.href='/profile'" title="查看个人资料">
+      <div class="sidebar-user-avatar" id="sidebarAvatar">?</div>
+      <span id="sidebarUsername"></span>
+    </div>
+    <div class="sidebar-actions">
+      <button class="btn-icon" title="设置" onclick="window.location.href='/manage'">⚙</button>
+    </div>
+  </div>
+
+  <button class="btn-new-chat" id="btnNewChat" onclick="createNewChat()">
+    ＋ 新对话
+  </button>
+
+  <div class="conv-list" id="convList">
+    <div class="conv-empty">暂无对话记录<br>点击上方按钮开始</div>
+  </div>
+
+  <div class="sidebar-footer">
+    <a href="/manage" style="font-size:12px;color:var(--text-muted);text-decoration:none;">⚙ 知识库管理</a>
+    <button class="btn-sidebar-footer" onclick="logout()">退出登录</button>
+  </div>
+</aside>
+
+<!-- ============================================================
+     Main Content
+     ============================================================ -->
+<main class="main-content" id="mainContent">
+  <!-- Header -->
+  <div class="chat-header">
+    <input type="text" class="chat-title" id="chatTitle"
+           placeholder="新对话" maxlength="100"
+           onchange="updateTitle(this.value)">
+    <div class="chat-header-right">
+      <button class="btn-icon" title="删除对话" onclick="deleteCurrentChat()">🗑</button>
+    </div>
+  </div>
+
+  <!-- Messages -->
+  <div class="chat-messages" id="chatMessages">
+    <div class="empty-state" id="emptyState">
+      <div class="icon">💊</div>
+      <h2>药品知识问答助手</h2>
+      <p>可以问我药品的适应症、用法用量、禁忌、不良反应、药物相互作用等问题。</p>
+    </div>
+  </div>
+
+  <!-- Input -->
+  <div class="chat-input-area">
+    <div class="input-row">
+      <div class="input-wrapper">
+        <textarea id="userInput" rows="1"
+                  placeholder="输入药品相关问题..."
+                  onkeydown="handleKeyDown(event)"></textarea>
+      </div>
+      <button class="btn-send" id="btnSend" onclick="sendMessage()" disabled>➤</button>
+    </div>
+    <label class="memory-toggle" title="开启后 AI 会记住当前对话的上下文">
+      <input type="checkbox" id="memoryToggle" checked onchange="toggleMemory()">
+      <span class="toggle-track"></span>
+      短期记忆
+    </label>
+  </div>
+</main>
+
+<script>
+// ============================================================
+// Auth & Init
+// ============================================================
+const TOKEN = localStorage.getItem('rag_token');
+const USERNAME = localStorage.getItem('rag_username');
+
+if (!TOKEN || !USERNAME) {
+  window.location.href = '/login';
+}
+
+const API_BASE = '/api/v1';
+
+async function api(path, method = 'GET', body = null) {
+  const opts = {
+    method,
+    headers: {
+      'Content-Type': 'application/json',
+      'Authorization': `Bearer ${TOKEN}`,
+    },
+  };
+  if (body) opts.body = JSON.stringify(body);
+
+  const res = await fetch(`${API_BASE}${path}`, opts);
+
+  if (res.status === 401) {
+    localStorage.removeItem('rag_token');
+    localStorage.removeItem('rag_username');
+    window.location.href = '/login';
+    throw new Error('未登录');
+  }
+
+  const data = await res.json();
+  if (!res.ok) {
+    throw new Error(data.detail || `请求失败 (${res.status})`);
+  }
+  return data;
+}
+
+// Init
+(function initSidebar() {
+  const cachedDisplayName = localStorage.getItem('rag_display_name');
+  if (cachedDisplayName) {
+    document.getElementById('sidebarUsername').textContent = cachedDisplayName;
+    document.getElementById('sidebarAvatar').textContent = cachedDisplayName.charAt(0).toUpperCase();
+  } else {
+    document.getElementById('sidebarUsername').textContent = USERNAME;
+    document.getElementById('sidebarAvatar').textContent = USERNAME.charAt(0).toUpperCase();
+  }
+  // Async: fetch latest display_name from server
+  api('/user/settings').then(settings => {
+    const displayName = settings.display_name || settings.username;
+    document.getElementById('sidebarUsername').textContent = displayName;
+    document.getElementById('sidebarAvatar').textContent = displayName.charAt(0).toUpperCase();
+    localStorage.setItem('rag_user_id', settings.user_id);
+    if (settings.display_name) {
+      localStorage.setItem('rag_display_name', settings.display_name);
+    } else {
+      localStorage.removeItem('rag_display_name');
+    }
+  }).catch(() => { /* fallback to cached/username — already shown */ });
+})();
+
+let currentSessionId = null;
+let enableMemory = true;
+
+// ============================================================
+// Sidebar — Conversation List
+// ============================================================
+async function loadConversations() {
+  try {
+    const data = await api('/conversations');
+    const list = document.getElementById('convList');
+
+    if (data.conversations.length === 0) {
+      list.innerHTML = '<div class="conv-empty">暂无对话记录<br>点击上方按钮开始</div>';
+      return;
+    }
+
+    list.innerHTML = data.conversations.map(c => `
+      <div class="conv-item${c.session_id === currentSessionId ? ' active' : ''}"
+           data-sid="${c.session_id}"
+           onclick="switchToChat('${c.session_id}')">
+        <span class="conv-item-title">${escapeHtml(c.title || '新对话')}</span>
+        <span class="conv-item-del" onclick="event.stopPropagation(); deleteChat('${c.session_id}')" title="删除">×</span>
+      </div>
+    `).join('');
+  } catch (err) {
+    console.error('加载对话列表失败:', err);
+  }
+}
+
+async function createNewChat() {
+  try {
+    const data = await api('/conversations', 'POST');
+    currentSessionId = data.session_id;
+    document.getElementById('chatTitle').value = '';
+    document.getElementById('chatMessages').innerHTML = `
+      <div class="empty-state" id="emptyState">
+        <div class="icon">💊</div>
+        <h2>药品知识问答助手</h2>
+        <p>可以问我药品的适应症、用法用量、禁忌、不良反应、药物相互作用等问题。</p>
+      </div>
+    `;
+    document.getElementById('btnSend').disabled = true;
+    document.getElementById('userInput').value = '';
+    document.getElementById('userInput').focus();
+    loadConversations();
+  } catch (err) {
+    showToast('创建对话失败: ' + err.message, 'error');
+  }
+}
+
+async function switchToChat(sessionId) {
+  currentSessionId = sessionId;
+  document.getElementById('chatMessages').innerHTML = '';
+  document.getElementById('btnSend').disabled = true;
+  document.getElementById('userInput').value = '';
+
+  // 加载对话历史和标题
+  try {
+    const conv = await api(`/conversations/${sessionId}`);
+    document.getElementById('chatTitle').value = conv.title || '';
+
+    const histData = await api(`/chat/history/${sessionId}`);
+    if (histData.history && histData.history.length > 0) {
+      document.getElementById('chatMessages').innerHTML = '';
+      histData.history.forEach(item => {
+        if (item.role === 'user') {
+          appendMessage('user', item.content);
+        } else {
+          appendMessage('assistant', item.content, item.sources);
+        }
+      });
+    } else {
+      document.getElementById('chatMessages').innerHTML = `
+        <div class="empty-state" id="emptyState">
+          <div class="icon">💊</div>
+          <h2>药品知识问答助手</h2>
+          <p>可以问我药品的适应症、用法用量、禁忌、不良反应、药物相互作用等问题。</p>
+        </div>
+      `;
+    }
+  } catch (err) {
+    console.error('加载对话失败:', err);
+  }
+
+  document.getElementById('userInput').focus();
+  loadConversations();
+}
+
+async function deleteChat(sessionId) {
+  if (!confirm('确定删除此对话？对话内容将被清除。')) return;
+
+  try {
+    await api(`/conversations/${sessionId}`, 'DELETE');
+    if (currentSessionId === sessionId) {
+      currentSessionId = null;
+      document.getElementById('chatTitle').value = '';
+      document.getElementById('chatMessages').innerHTML = `
+        <div class="empty-state" id="emptyState">
+          <div class="icon">💊</div>
+          <h2>药品知识问答助手</h2>
+          <p>可以问我药品的适应症、用法用量、禁忌、不良反应、药物相互作用等问题。</p>
+        </div>
+      `;
+      document.getElementById('btnSend').disabled = true;
+    }
+    loadConversations();
+    showToast('对话已删除', 'success');
+  } catch (err) {
+    showToast('删除失败: ' + err.message, 'error');
+  }
+}
+
+async function deleteCurrentChat() {
+  if (!currentSessionId) return;
+  await deleteChat(currentSessionId);
+}
+
+// ============================================================
+// Chat
+// ============================================================
+function appendMessage(role, content, sources = null) {
+  const container = document.getElementById('chatMessages');
+  // Remove empty state if present
+  const empty = document.getElementById('emptyState');
+  if (empty) empty.remove();
+
+  const div = document.createElement('div');
+  div.className = `message ${role}`;
+
+  const avatarIcon = role === 'user' ? '👤' : '💊';
+  div.innerHTML = `
+    <div class="msg-avatar">${avatarIcon}</div>
+    <div class="msg-bubble">
+      ${role === 'assistant' ? renderMarkdown(content) : escapeHtml(content)}
+      ${sources && sources.length > 0 ? renderSources(sources) : ''}
+    </div>
+  `;
+
+  container.appendChild(div);
+  scrollToBottom();
+}
+
+function renderSources(sources) {
+  if (!sources || sources.length === 0) return '';
+  let html = '<div class="sources-section">';
+  html += '<button class="sources-toggle" onclick="var l=this.nextElementSibling;l.classList.toggle(\'show\');this.textContent=l.classList.contains(\'show\')?\'▲ 收起来源\':\'▼ 查看来源 (' + sources.length + ')\'">▼ 查看来源 (' + sources.length + ')</button>';
+  html += '<div class="sources-list">';
+  sources.forEach((s, i) => {
+    html += `<div class="source-item">`;
+    html += `<span class="src-drug">${escapeHtml(s.drug_name || '')}</span>`;
+    if (s.section) html += `<span class="src-section">[${escapeHtml(s.section)}]</span>`;
+    if (s.score != null) html += ` <span style="color:var(--text-muted);font-size:11px;">(相关度: ${Number(s.score).toFixed(3)})</span>`;
+    html += `<div>${escapeHtml((s.chunk_text || '').substring(0, 200))}...</div>`;
+    html += `</div>`;
+  });
+  html += '</div></div>';
+  return html;
+}
+
+// Markdown renderer — block-level line-by-line parser.
+// Supports: headings (h1-h6), hr, blockquote, tables, unordered/ordered lists,
+// inline bold/italic/code, and paragraphs.
+function renderMarkdown(text) {
+  if (!text) return '';
+
+  // Pre-process: normalize line breaks — convert any literal <br> tags
+  // the LLM may output into regular newlines before parsing
+  text = text.replace(/<br\s*\/?>/gi, '\n');
+
+  // Pre-process: strip backslash-escaped Markdown syntax at line start.
+  // Some LLMs (e.g. qwen3.7-plus) output \###, \---, \>, \- etc. as
+  // "protective escaping". Remove the leading backslash so the main
+  // parser can recognise headings / hr / blockquotes / lists.
+  text = text.replace(/^\\(#{1,6})(\s)/gm, '$1$2');     // \###  -> ###
+  text = text.replace(/^\\(>)(\s?)/gm, '$1$2');          // \>    -> >
+  text = text.replace(/^\\([-*])(\s)/gm, '$1$2');        // \- item -> - item
+  text = text.replace(/^\\(\d+\.)(\s)/gm, '$1$2');        // \1.   -> 1.
+  text = text.replace(/^\\(---+|[-*_]{3,})\s*$/gm, '$1'); // \---  -> ---
+
+  // ---- helpers ----
+  const esc = (s) => String(s)
+    .replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+
+  const inline = (s) => {
+    // must run AFTER escaping
+    s = s.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
+    s = s.replace(/\*(.+?)\*/g, '<em>$1</em>');
+    s = s.replace(/`([^`]+)`/g, '<code>$1</code>');
+    return s;
+  };
+
+  const lines = text.split('\n');
+  let html = '';
+  let i = 0;
+
+  while (i < lines.length) {
+    const raw = lines[i];
+    const trimmed = raw.trim();
+
+    // blank line
+    if (trimmed === '') {
+      i++;
+      continue;
+    }
+
+    // ---- horizontal rule ----
+    if (/^(\\---|\*\s*\*\s*\*|---+|___+|[-*_]{3,})\s*$/.test(trimmed)) {
+      html += '<hr>';
+      i++;
+      continue;
+    }
+
+    // ---- headings ----
+    const hMatch = trimmed.match(/^(#{1,6})\s+(.+)$/);
+    if (hMatch) {
+      const level = hMatch[1].length;
+      html += '<h' + level + '>' + inline(esc(hMatch[2])) + '</h' + level + '>';
+      i++;
+      continue;
+    }
+
+    // ---- blockquote ----
+    if (trimmed.startsWith('> ')) {
+      const bqLines = [];
+      while (i < lines.length && lines[i].trim().startsWith('> ')) {
+        bqLines.push(lines[i].trim().slice(2));
+        i++;
+      }
+      html += '<blockquote><p>' + inline(bqLines.map(l => esc(l)).join('<br>')) + '</p></blockquote>';
+      continue;
+    }
+
+    // ---- table (detect separator row) ----
+    if (trimmed.includes('|') && i + 1 < lines.length) {
+      const nextTrimmed = lines[i + 1].trim();
+      if (/^\|?[\s:-]+\|[\s|:-]+\|?$/.test(nextTrimmed)) {
+        // header row
+        const headers = trimmed.split('|').map(c => c.trim()).filter(c => c !== '');
+        i += 2; // skip separator
+        const bodyRows = [];
+        while (i < lines.length && lines[i].trim().includes('|')) {
+          const cells = lines[i].trim().split('|').map(c => c.trim()).filter(c => c !== '');
+          bodyRows.push(cells);
+          i++;
+        }
+        html += '<div class="table-wrapper"><table>';
+        html += '<thead><tr>' + headers.map(h => '<th>' + inline(esc(h)) + '</th>').join('') + '</tr></thead>';
+        html += '<tbody>';
+        for (const row of bodyRows) {
+          html += '<tr>' + row.map(c => '<td>' + inline(esc(c)) + '</td>').join('') + '</tr>';
+        }
+        html += '</tbody></table></div>';
+        continue;
+      }
+    }
+
+    // ---- unordered list (consecutive "- " or "* " lines) ----
+    if (/^[-*]\s+/.test(trimmed)) {
+      const items = [];
+      while (i < lines.length && /^[-*]\s+/.test(lines[i].trim())) {
+        items.push(lines[i].trim().replace(/^[-*]\s+/, ''));
+        i++;
+      }
+      html += '<ul>' + items.map(it => '<li>' + inline(esc(it)) + '</li>').join('') + '</ul>';
+      continue;
+    }
+
+    // ---- ordered list (consecutive "1. " lines) ----
+    if (/^\d+\.\s+/.test(trimmed)) {
+      const items = [];
+      while (i < lines.length && /^\d+\.\s+/.test(lines[i].trim())) {
+        items.push(lines[i].trim().replace(/^\d+\.\s+/, ''));
+        i++;
+      }
+      html += '<ol>' + items.map(it => '<li>' + inline(esc(it)) + '</li>').join('') + '</ol>';
+      continue;
+    }
+
+    // ---- paragraph (default) ----
+    const paraLines = [];
+    while (i < lines.length && lines[i].trim() !== '' &&
+           !/^(#{1,6}\s|> |[-*]\s+|\d+\.\s+|\\---|---+|\*\s*\*\s*\*)/.test(lines[i].trim()) &&
+           !(lines[i].trim().includes('|') && i + 1 < lines.length &&
+             /^\|?[\s:-]+\|[\s|:-]+\|?$/.test((lines[i+1]||'').trim()))) {
+      paraLines.push(lines[i].trim());
+      i++;
+    }
+    if (paraLines.length) {
+      html += '<p>' + inline(paraLines.map(l => esc(l)).join('<br>')) + '</p>';
+    }
+  }
+
+  return html || esc(text);
+}
+
+function escapeHtml(text) {
+  const div = document.createElement('div');
+  div.textContent = text;
+  return div.innerHTML;
+}
+
+function scrollToBottom() {
+  const container = document.getElementById('chatMessages');
+  setTimeout(() => { container.scrollTop = container.scrollHeight; }, 50);
+}
+
+// ============================================================
+// SSE Streaming
+// ============================================================
+async function sendMessage() {
+  const input = document.getElementById('userInput');
+  const btn = document.getElementById('btnSend');
+  const message = input.value.trim();
+  if (!message) return;
+
+  // Create session if none
+  if (!currentSessionId) {
+    await createNewChat();
+  }
+
+  input.value = '';
+  input.style.height = 'auto';
+  btn.disabled = true;
+
+  appendMessage('user', message);
+
+  // Add loading bubble
+  const container = document.getElementById('chatMessages');
+  const loadingDiv = document.createElement('div');
+  loadingDiv.className = 'message assistant';
+  loadingDiv.innerHTML = `
+    <div class="msg-avatar">💊</div>
+    <div class="msg-bubble"><div class="loading-dots"><span></span><span></span><span></span></div></div>
+  `;
+  container.appendChild(loadingDiv);
+  scrollToBottom();
+
+  try {
+    const token = localStorage.getItem('rag_token');
+    const res = await fetch(`${API_BASE}/chat/stream`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${token}`,
+      },
+      body: JSON.stringify({
+        message,
+        session_id: currentSessionId,
+        enable_memory: enableMemory,
+      }),
+    });
+
+    if (res.status === 401) {
+      localStorage.removeItem('rag_token');
+      window.location.href = '/login';
+      return;
+    }
+
+    if (!res.ok) {
+      const errData = await res.json().catch(() => ({}));
+      throw new Error(errData.detail || `请求失败 (${res.status})`);
+    }
+
+    // Remove loading, add real bubble
+    const realDiv = document.createElement('div');
+    realDiv.className = 'message assistant';
+    realDiv.innerHTML = `<div class="msg-avatar">💊</div><div class="msg-bubble"></div>`;
+    container.replaceChild(realDiv, loadingDiv);
+
+    const bubble = realDiv.querySelector('.msg-bubble');
+    let fullAnswer = '';
+    let sources = null;
+
+    const reader = res.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = '';
+
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+
+      buffer += decoder.decode(value, { stream: true });
+      const lines = buffer.split('\n');
+      buffer = lines.pop() || '';
+
+      for (const line of lines) {
+        if (!line.trim()) continue;
+
+        if (line.startsWith('event: sources')) {
+          continue; // next data line has the sources
+        }
+
+        if (line.startsWith('data: ')) {
+          try {
+            const json = JSON.parse(line.substring(6));
+
+            if (json.event === 'token') {
+              fullAnswer += json.data;
+              bubble.innerHTML = renderMarkdown(fullAnswer);
+              scrollToBottom();
+            } else if (json.event === 'done') {
+              // Complete
+            } else if (json.event === 'sources') {
+              // Sources come via the 'sources' event type
+              // Parse the data field which is a JSON string of the sources array
+            } else if (json.event === 'error') {
+              throw new Error(json.data);
+            }
+          } catch (e) {
+            // Could be direct data (sources payload)
+            if (line.includes('"drug_name"') || line.includes('"chunk_text"')) {
+              try {
+                sources = JSON.parse(line.substring(6));
+              } catch {}
+            } else if (!line.startsWith('data: {"event":')) {
+              // Raw token
+            }
+          }
+        }
+      }
+    }
+
+    // Check for sources event from combined buffer
+    if (!fullAnswer && !sources) {
+      // fallback
+    }
+
+    // Add sources if available and not already rendered
+    if (sources && sources.length > 0 && !bubble.innerHTML.includes('sources-section')) {
+      bubble.innerHTML += renderSources(sources);
+    }
+
+    // Reload conversation list to update title
+    loadConversations();
+
+    // Update title if this was first message
+    setTimeout(async () => {
+      try {
+        const conv = await api(`/conversations/${currentSessionId}`);
+        if (conv.title) {
+          document.getElementById('chatTitle').value = conv.title;
+          loadConversations();
+        }
+      } catch {}
+    }, 1500);
+
+  } catch (err) {
+    loadingDiv.innerHTML = `
+      <div class="msg-avatar">💊</div>
+      <div class="msg-bubble" style="color:var(--danger);">出错了: ${escapeHtml(err.message)}</div>
+    `;
+  } finally {
+    btn.disabled = false;
+    document.getElementById('userInput').focus();
+  }
+}
+
+// ============================================================
+// UI Helpers
+// ============================================================
+function handleKeyDown(event) {
+  if (event.key === 'Enter' && !event.shiftKey) {
+    event.preventDefault();
+    sendMessage();
+  }
+}
+
+function toggleMemory() {
+  enableMemory = document.getElementById('memoryToggle').checked;
+}
+
+function updateTitle(newTitle) {
+  if (!currentSessionId || !newTitle.trim()) return;
+  api(`/conversations/${currentSessionId}`, 'PATCH', { title: newTitle.trim() })
+    .then(() => loadConversations())
+    .catch(err => console.error('更新标题失败:', err));
+}
+
+function logout() {
+  localStorage.removeItem('rag_token');
+  localStorage.removeItem('rag_username');
+  localStorage.removeItem('rag_user_id');
+  localStorage.removeItem('rag_display_name');
+  window.location.href = '/login';
+}
+
+function showToast(msg, type = 'error') {
+  const toast = document.createElement('div');
+  toast.className = `toast ${type}`;
+  toast.textContent = msg;
+  document.body.appendChild(toast);
+  setTimeout(() => toast.remove(), 3000);
+}
+
+// Auto-resize textarea
+document.getElementById('userInput').addEventListener('input', function() {
+  this.style.height = 'auto';
+  this.style.height = Math.min(this.scrollHeight, 120) + 'px';
+  document.getElementById('btnSend').disabled = !this.value.trim();
+});
+
+// ============================================================
+// Init
+// ============================================================
+loadConversations();
+document.getElementById('userInput').focus();
+</script>
+</body>
+</html>

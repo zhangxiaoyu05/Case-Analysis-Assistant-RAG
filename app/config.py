@@ -329,6 +329,62 @@ class Config:
     def memory_max_summary_chars(self) -> int:
         return _yaml_section("memory.max_summary_chars", 800)
 
+    @property
+    def memory_token_threshold_ratio(self) -> float:
+        """Token 阈值触发比例：超过上下文窗口的此比例时触发摘要压缩。"""
+        return _yaml_section("memory.token_threshold_ratio", 0.7)
+
+    @property
+    def memory_context_window_tokens(self) -> int:
+        """模型上下文窗口大小（token 数），用于计算摘要触发阈值。"""
+        return _yaml_section("memory.context_window_tokens", 8192)
+
+    # ============================================================
+    # 中期记忆配置
+    # ============================================================
+    @property
+    def user_memory_extract_model(self) -> str:
+        """记忆提取模型（轻量级即可）。"""
+        return _yaml_section("user_memory.extract_model", "qwen-flash")
+
+    @property
+    def user_memory_max_per_user(self) -> int:
+        """每个用户最多保留的记忆条数。"""
+        return _yaml_section("user_memory.max_memories_per_user", 50)
+
+    @property
+    def user_memory_decay_factor(self) -> float:
+        """每日衰减系数（每天 × decay_factor）。"""
+        return _yaml_section("user_memory.decay_factor", 0.95)
+
+    @property
+    def user_memory_min_importance(self) -> float:
+        """最低重要性阈值（低于此值自动清理）。"""
+        return _yaml_section("user_memory.min_importance", 0.1)
+
+    @property
+    def user_memory_recall_top_k(self) -> int:
+        """每次请求召回的记忆条数。"""
+        return _yaml_section("user_memory.recall_top_k", 5)
+
+    @property
+    def user_memory_merge_threshold(self) -> float:
+        """关键词重叠度阈值（超过则合并而非新增）。"""
+        return _yaml_section("user_memory.merge_threshold", 0.6)
+
+    # ============================================================
+    # 长期记忆配置（用户画像）
+    # ============================================================
+    @property
+    def user_profile_extract_model(self) -> str:
+        """画像提取模型（轻量级即可）。"""
+        return _yaml_section("user_profile.extract_model", "qwen-flash")
+
+    @property
+    def user_profile_min_confidence(self) -> float:
+        """最低置信度阈值（低于此值不保存）。"""
+        return _yaml_section("user_profile.min_confidence", 0.5)
+
     # ============================================================
     # Redis 业务配置
     # ============================================================

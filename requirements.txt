@@ -45,5 +45,8 @@ pydantic-settings>=2.1.0
 # ===== 前端 =====
 streamlit>=1.28.0
 
+# ===== JWT 鉴权 =====
+pyjwt>=2.8.0
+
 # ===== 日志 =====
 loguru>=0.7.0

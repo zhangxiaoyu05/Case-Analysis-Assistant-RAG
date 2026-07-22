@@ -657,7 +657,7 @@ START → intent → [条件路由]
 **操作时间**: 2026-06-15
 
 **操作内容**:
-为项目编写了完整的 pytest 单元测试套件，共 **208 个测试用例**（现已增长至 **288 个**），全部通过。
+为项目编写了完整的 pytest 单元测试套件，共 **208 个测试用例**（现已增长至 **373 个**），全部通过。
 
 **测试结构**:
 ```
@@ -698,7 +698,7 @@ tests/
 | API 端点 | 3 | 58 | 健康检查、问答、流式问答、历史管理、鉴权、Schema 验证 |
 | LangGraph 图 | 4 | 73 | 状态管理、7节点函数、4-way条件路由、图构建/编译/调用 |
 | 服务层 | 1 | 18 | 短期记忆管理（对话摘要、MemoryManager） |
-| **合计** | **18** | **288** | - |
+| **合计** | **24** | **373** | - |
 
 **运行方式**:
 ```bash
@@ -802,24 +802,28 @@ pytest tests/ --cov=app       # 含覆盖率报告（需 pytest-cov）
 - Swagger 文档: `http://localhost:8000/docs`
 
 
-## ✅ 项目状态：全部完成（38/38 步骤 + 后续优化）
+## ✅ 项目状态：全部完成（40/40 步骤 + 后续优化）
 
 | 模块 | 完成步骤 | 状态 |
 |------|----------|------|
 | 基础设施 (Docker) | 步骤 1, 8, 12 | ✅ |
-| 配置层 (.env, YAML) | 步骤 2, 5, 6, 13, 16, 35, 37 | ✅ |
-| 数据层 (Milvus/MySQL/Redis) | 步骤 3, 19-22, 34 | ✅ |
+| 配置层 (.env, YAML) | 步骤 2, 5, 6, 13, 16, 35, 37, 39, 40 | ✅ |
+| 数据层 (Milvus/MySQL/Redis) | 步骤 3, 19-22, 34, 39, 40 | ✅ |
 | Schema 层 (Pydantic) | 步骤 17, 37 | ✅ |
 | 离线流程 (load->clean->split->embed) | 步骤 23, 33 | ✅ |
-| 在线流程 (intent->retrieve->rank->generate) | 步骤 24, 37 | ✅ |
-| LangGraph 编排 | 步骤 25, 37 | ✅ |
-| API 端点 | 步骤 17, 25, 37 | ✅ |
+| 在线流程 (intent->retrieve->rank->generate) | 步骤 24, 37, 优化 G | ✅ |
+| LangGraph 编排 | 步骤 25, 37, 39, 40 | ✅ |
+| API 端点 | 步骤 17, 25, 37, 39, 40 | ✅ |
 | API 鉴权与安全 | 步骤 35 | ✅ |
+| 用户系统 (注册/登录/JWT) | 步骤 39 | ✅ |
 | 会话管理 (Redis) | 步骤 25, 34 | ✅ |
+| 短期记忆 (对话摘要) | 步骤 38 | ✅ |
+| 中期记忆 (跨会话) | 步骤 39 | ✅ |
+| 长期记忆 (用户画像) | 步骤 40 | ✅ |
 | 知识库管理 API | 步骤 29, 34 | ✅ |
-| 测试 (288 用例) | 步骤 27, 33, 35, 37, 38 | ✅ |
+| 测试 (373 用例) | 步骤 27, 33, 35, 37, 38, 39, 40 | ✅ |
 | 测试数据 (20 药品) | 步骤 28 | ✅ |
-| 前端 Web 界面 | 步骤 30, 35, 36 + 优化 F | ✅ |
+| 前端 Web 界面 | 步骤 30, 35, 36, 39 + 优化 F | ✅ |
 | 前端 Streamlit 界面 | 步骤 32, 37 | ✅ |
 
 ---
@@ -1114,13 +1118,15 @@ D:\RAG_project\
 │   ├── init_milvus.py          ✅ 步骤 19（Milvus Collection + 索引初始化）
 │   ├── init_collection.py      ✅ 步骤 20（统一初始化：MySQL + Milvus + Redis）
 │   ├── run_offline.py          ✅ 步骤 23（离线流程 CLI 入口）
-│   └── split_drug_file.py      ✅ 优化 D（20 种药品合集拆分脚本）
+│   ├── split_drug_file.py      ✅ 优化 D（20 种药品合集拆分脚本）
+│   ├── migration_v2.sql        ✅ 步骤 39（Phase 0: users + conversations 表 DDL）
+│   └── migration_memory.sql    ✅ 步骤 39-40（Phase 2+3: user_memories + user_profiles 表 DDL）
 ├── config/
-│   ├── config.yaml             ✅ 步骤 5 + 步骤 13（扩展配置项）+ 步骤 26（dimension 1536→1024）
-│   └── prompts.yaml            ✅ 步骤 6
+│   ├── config.yaml             ✅ 步骤 5 + 步骤 13（扩展配置项）+ 步骤 26（dimension 1536→1024）+ 步骤 39-40（user_memory + user_profile 配置节）
+│   └── prompts.yaml            ✅ 步骤 6 + 步骤 37（4 分类 + general 模板）+ 步骤 39-40（{user_memories} + {user_profile} 占位符）+ 优化 G（对话回忆 vs 攻击区分）
 ├── app/                        ✅ 步骤 9 + 步骤 16 + 步骤 17 + 步骤 21~22
 │   ├── __init__.py
-│   ├── config.py               ✅ 步骤 16（配置加载：.env + config.yaml）
+│   ├── config.py               ✅ 步骤 16（配置加载：.env + config.yaml）+ 步骤 38-40（memory/user_memory/user_profile 属性）
 │   ├── main.py                 ✅ 入口占位文件（旧版，空文件）
 │   ├── api/
 │   │   ├── __init__.py
@@ -1130,9 +1136,11 @@ D:\RAG_project\
 │   │   ├── dependencies.py     ✅ 步骤 25（FastAPI 依赖注入：get_graph / get_history_manager）
 │   │   └── routers/
 │   │       ├── __init__.py
-│   │       ├── chat.py         ✅ 步骤 17 + 步骤 25（4 端点完整实现）
+│   │       ├── chat.py         ✅ 步骤 17 + 步骤 25 + 步骤 39-40（4 端点完整实现：单轮/流式/历史/清空，含中期记忆 + 用户画像 + enable_memory 修复）
 │   │       ├── health.py       ✅ 步骤 17 + 步骤 25（真实依赖检测）
-│   │       └── knowledge.py    ✅ 步骤 29（知识库管理 API：上传/状态/列表/删除）
+│   │       ├── knowledge.py    ✅ 步骤 29（知识库管理 API：上传/状态/列表/删除）
+│   │       ├── auth.py         ✅ 步骤 39（用户注册/登录 JWT 鉴权端点）
+│   │       └── conversations.py ✅ 步骤 39（对话列表：按用户查询历史会话）
 │   ├── schemas/                ✅ 步骤 17
 │   │   ├── __init__.py
 │   │   ├── common.py           ✅ 通用模型（HealthResponse / ErrorResponse）
@@ -1163,18 +1171,24 @@ D:\RAG_project\
 │   ├── services/               ✅ 步骤 25
 │   │   ├── __init__.py         ✅ 统一导出
 │   │   ├── history_manager.py  ✅ AsyncRedisHistoryManager（异步 Redis 会话 CRUD + 摘要存储）
-│   │   └── memory_manager.py   ✅ 步骤 38（短期记忆管理：对话摘要 + 滑动窗口）
-├── tests/                      ✅ 步骤 10 + 步骤 27 + 步骤 33 + 步骤 35 + 步骤 38（288 个测试用例）
-│   ├── conftest.py             ✅ 步骤 27 + 步骤 35（共享 fixtures + APP_API_KEY 默认空字符串向后兼容）
+│   │   ├── memory_manager.py   ✅ 步骤 38（短期记忆管理：对话摘要 + 滑动窗口）
+│   │   ├── user_manager.py     ✅ 步骤 39（用户管理：注册/登录/JWT + bcrypt 密码哈希）
+│   │   ├── user_memory_manager.py  ✅ 步骤 39（中期记忆管理：LLM 提取 + 衰减 + 跨会话持久化）
+│   │   ├── user_profile_manager.py ✅ 步骤 40（长期记忆管理：LLM 提取 9 种人口属性 + INSERT ON DUPLICATE KEY UPDATE）
+│   │   └── conversation_manager.py ✅ 步骤 39（对话管理：首条消息自动生成标题）
+├── tests/                      ✅ 步骤 10 + 步骤 27 + 步骤 33 + 步骤 35 + 步骤 38-40（373 个测试用例）
+│   ├── conftest.py             ✅ 步骤 27 + 步骤 35 + 步骤 39（共享 fixtures + APP_API_KEY 默认空字符串向后兼容 + mock_user_token）
 │   ├── test_offline/           ✅ 步骤 27 + 步骤 33（62+31=93 个测试：loader/cleaner/splitter/embedder/pipeline/multi_drug_splitter）
-│   ├── test_online/            ✅ 步骤 27 + 步骤 37（51 个测试：intent/retriever/ranker/generator，含 4 分类测试）
-│   ├── test_api/               ✅ 步骤 27 + 步骤 35 + 步骤 37（58 个测试：health/chat/history/auth，含 general/attack 流式测试）
+│   ├── test_online/            ✅ 步骤 27 + 步骤 37（51 个测试：intent/retriever/ranker/generator，含 4 分类测试 + 优化 G recall_patterns 安全网）
+│   ├── test_api/               ✅ 步骤 27 + 步骤 35 + 步骤 37 + 步骤 39（58+ 个测试：health/chat/history/auth/conversations，含 general/attack 流式测试 + JWT 鉴权）
 │   ├── test_graph/             ✅ 步骤 27 + 步骤 37（73 个测试：state/edges/nodes/graph，含 general_node/attack_node 测试）
-│   └── test_services/          ✅ 步骤 38（18 个测试：memory_manager）
+│   └── test_services/          ✅ 步骤 38-40（18+28+26+16=88 个测试：memory_manager/user_memory_manager/user_profile_manager/user_manager/conversation_manager）
 ├── frontend/
-│   ├── chat.html                 ✅ 步骤 36（问答页面）+ 优化 F（完整 Markdown 渲染引擎：标题/分隔线/表格/引用/列表/代码）+ Bug 修复（<br> 转义问题）
-│   ├── manage.html               ✅ 步骤 36（管理页面：卡片式布局，上传入库 + 药品列表 + 系统状态）
-│   └── streamlit_app.py          ✅ 步骤 32（~320行 Streamlit 前端）+ 步骤 37（4 意图分类：general/attack 处理）
+│   ├── chat.html                 ✅ 步骤 36（问答页面）+ 优化 F（完整 Markdown 渲染引擎）+ Bug 修复（<br> 转义问题）
+│   ├── manage.html               ✅ 步骤 36（管理页面：卡片式布局）
+│   ├── login.html                 ✅ 步骤 39（登录/注册页面：JWT + localStorage 持久化）
+│   ├── index.html                 ✅ 步骤 30（旧版 SPA，已拆分为 chat + manage，保留兼容）
+│   └── streamlit_app.py          ✅ 步骤 32（~320行 Streamlit 前端）+ 步骤 37（4 意图分类）
 ├── data/
 │   ├── raw/
 │   │   ├── 阿司匹林肠溶片说明书_test.txt  ✅ 步骤 8（单药测试文档）
@@ -1941,3 +1955,13 @@ if history and key == "dosage_followup":  # ← 条件过窄
 | 2026-07-21 | Bug 修复 | **`<br>` 标签显示为文本**：renderMarkdown 中段落/引用块先 join('<br>') 再 escapeHtml() 导致 `<br>` 被转义为 `&lt;br&gt;`。修复为逐行转义后再 join('<br>')，并新增预处理 `text.replace(/<br\s*\/?>/gi, '\n')` 统一 LLM 可能输出的字面 `<br>` 为换行符。|
 | 2026-07-21 | 步骤 38 | **短期记忆实现 — 对话摘要与上下文最大化**：分析当前系统 4 个缺陷（历史仅 dosage_followup 使用/无摘要/非多轮格式/128K 上下文未利用）。新增 `app/services/memory_manager.py`（~220 行）实现"滑动窗口 + 累积摘要"模式：用 qwen-flash 压缩旧轮次为摘要，保留最近 N 轮完整，摘要存入 Redis `session:{id}:summary`。更新 10 个源文件 + prompts.yaml 所有 4 个模板新增 `{memory_summary}` 占位符。新增 18 个 MemoryManager 测试。288 测试通过。|
 | 2026-07-21 | Bug 修复 | **短期记忆 — 非追问模板无法感知对话历史**：实测发现"我的名字是什么"无法回答。根因：`_get_user_prompt()` 中 `history_text` 仅对 `dosage_followup` 模板格式化（`if key == "dosage_followup"`），导致 default/comparison/general 模板无近期对话上下文。修复：移除条件限制，所有模板统一注入 `{history}` + `{memory_summary}`；`general_node` 补传 `history` 参数。Chrome DevTools 实测：姓名记忆 ✅ + 药品追问 ✅。|
+| 2026-07-22 | 步骤 39 | **Phase 2: 中期记忆（跨会话）实现**：新增 `scripts/migration_memory.sql`（`user_memories` 表 DDL，含 TTL 衰减 + 防重复 UNIQUE KEY）；新增 `app/services/user_memory_manager.py`（~350 行，LLM 提取 → 事实/偏好/模式 三类型分类 → 衰减评分 → INSERT ON DUPLICATE KEY UPDATE 防重复）；新增 `tests/test_services/test_user_memory_manager.py`（28 个测试）；`config/config.yaml` 新增 `user_memory` 配置节（extract_model/min_confidence/decay_enabled）；`app/config.py` 新增 5 个 user_memory 配置属性；`config/prompts.yaml` 4 个 chat 模板 user prompt 均新增 `{user_memories}` 占位符；`app/online/generator.py` 新增 `user_memories` 参数；`app/graph/state.py` 新增 `user_memories` 字段；`app/graph/nodes.py` `generate_node`/`general_node` 传递 user_memories；`app/api/routers/chat.py` `_load_context()` 加载中期记忆、新增 `_extract_memories_async()` 异步提取；`app/api/main.py` `lifespan` 注册每日衰减任务。**设计要点**：中期记忆独立于 `enable_memory` 开关（只控制短期），跨会话持久化到 MySQL，每日凌晨 2 点自动衰减分数，调用 qwen-flash 轻量模型。|
+| 2026-07-22 | 步骤 40 | **Phase 3: 长期记忆（用户画像）实现**：新增 `scripts/migration_memory.sql`（`user_profiles` 表 DDL，UNIQUE KEY uk_user_field (user_id, field_name)，ON DELETE CASCADE）；新增 `app/services/user_profile_manager.py`（~320 行，LLM 提取 9 种人口属性字段 → confidence 阈值过滤 → INSERT ON DUPLICATE KEY UPDATE 覆蓋旧值）；新增 `tests/test_services/test_user_profile_manager.py`（26 个测试，覆盖 get_profile/format_profile_for_prompt/get_field/delete_field/_upsert_field/_format_profile_text/extract_and_save/close）；`config/config.yaml` 新增 `user_profile` 配置节（extract_model/min_confidence）；`app/config.py` 新增 2 个 user_profile 配置属性（user_profile_extract_model/user_profile_min_confidence）；`config/prompts.yaml` 4 个 chat 模板新增 `{user_profile}` 占位符（在 default/comparison 中位于 user_memories 和 context 之间，在 dosage_followup/general 中位于 user_memories 之后）；`app/online/generator.py` 新增 `user_profile` 参数；`app/graph/state.py` 新增 `user_profile` 字段；`app/graph/nodes.py` `generate_node`/`general_node` 传递 user_profile；`app/api/routers/chat.py` `_load_context()` 加载用户画像、新增 `_extract_profile_async()` 异步提取。**设计要点**：profile 永远覆盖旧值（用户最新陈述 > 旧数据），无衰减，confidence < 0.5 不保存，confidence < 0.7 标注"（用户自称）"，与 `enable_memory` 独立。|
+| 2026-07-22 | Bug 修复 | **`enable_memory` 错误关闭全部记忆**：`_load_context()` 中当 `enable_memory=False` 时，早期返回将所有上下文（短期+中期+长期）设为空。修复为只跳过 Redis 短期历史加载，中期记忆（MySQL）和用户画像（MySQL）独立加载不受影响。同步修复 `chat()` 和 `chat_stream()` 中的记忆/画像提取 gating：原来也在 `enable_memory` 条件下跳过，现在始终异步提取。|
+| 2026-07-22 | Bug 修复 | **`history_for_llm` NameError 导致 500 错误**：`_load_context()` 中当 `enable_memory=False` 时只设置了 `raw_history, memory_summary, recent_history` 三个变量，`history_for_llm` 未定义，第 136 行 logger.info 中 `len(history_for_llm)` 引发 NameError → 500。修复：`enable_memory=False` 分支显式设 `history_for_llm = []`。 |
+| 2026-07-22 | Bug 修复 | **LLM 输出反斜杠转义 Markdown 导致渲染失效**：用户反馈 AI 回答中 `\---`、`\####`、`\>` 等显示为原始文本而非渲染后的 `<hr>`/`<h4>`/`<blockquote>`。根因：`qwen3.7-plus` 模型对 Markdown 语法输出"保护性转义"（`\---` 而非 `---`、`\####` 而非 `####`），前端 `renderMarkdown()` 的标题正则 `^(#{1,6})\s+` 不匹配 `\####`。修复：`chat.html` `renderMarkdown()` 新增 5 条预处理正则（`gm` 多行模式），在正式解析前剥离行首 `\#`、`\>`、`\-`、`\1.`、`\---` 等转义反斜杠。Node.js 验证：7/7 格式全部正确渲染。|
+| 2026-07-22 | 优化 G | **意图识别优化 — 防止对话回忆误判为攻击**：Chrome DevTools 测试发现"我刚才说的个人信息是什么？请复述一下。"被误判为 `attack`。**根因**：LLM 看到"复述"+ "信息"误关联到"提取系统提示词"攻击模式。**修复（2 层防御）**：(1) `config/prompts.yaml` intent.system prompt 新增「关键区分」段落，明确"问自己说过的内容 ≠ 攻击，问系统指令 = 攻击"，新增 3 条对话回忆 few-shot 示例；(2) `app/online/intent.py` `_quick_classify()` 新增 `recall_patterns`（5 组正则：对话回忆类查询直接返回 `drug_inquiry` 0.85，完全跳过 LLM 调用）。15 个测试用例全部通过，373 测试零回归。|
+| 2026-07-22 | Bug 修复 | **对话标题始终显示"新对话"**：用户反馈侧边栏每个对话窗口标题都是"新对话"，没有辨识度。**根因**：前端使用流式端点 `/api/v1/chat/stream`，该端点设置了 `is_first_message` 标记（第 316 行）但从未调用 `_generate_title_async()`，标题生成只在非流式端点 `/api/v1/chat` 中有。**修复（2 处）**：(1) 在 `chat_stream()` 中 `is_first_message` 判断后新增 `asyncio.create_task(_generate_title_async(...))`；(2) `_generate_title_async()` 改为 `await asyncio.to_thread()` 包装同步 LLM 调用，避免阻塞事件循环。Chrome DevTools 实测：首轮消息"布洛芬的副作用有哪些？需要注意什么？"→ 自动生成标题"布洛芬副作用及注意事项"。|
+| 2026-07-22 | Bug 修复 | **`index.html` Markdown 渲染器残缺 — 移植 `chat.html` 完整版**：`index.html`（实际被路由 `/app` 使用）的 `renderMarkdown()` 只有 ~40 行简易版，仅支持 `###`/`##` → h3、`**bold**`、基础表格和列表，缺少：(1) h1/h2/h4/h5/h6 支持（`####` 显示为 raw text）；(2) 分隔线 `---`（`<hr>`）；(3) 引用块 `> `（`<blockquote>`）；(4) 行内代码 `` `code` ``；5) 斜体 `*italic*`；(6) 反斜杠转义预处理（之前只在 `chat.html` 修复过）。**修复**：将 `chat.html` 完整的 ~130 行逐行块级解析器整体移植到 `index.html`，同时补齐对应的 CSS 样式（h1-h6/hr/blockquote/code/thead/tbody）。Chrome DevTools 实测：`####` → h4 ✅, `---` → hr ✅, `> ⚠️` → blockquote（绿左边框）✅。|
+| 2026-07-22 | 步骤 41 | **用户主页 — 昵称设置 + 个人画像查看/编辑**：新增用户主页功能，点击侧边栏头像区域跳转。**后端**：`app/services/user_manager.py` 新增 `update_display_name()`；`app/services/user_profile_manager.py` 新增 `upsert_field()`/`get_valid_fields()`/`update_profile_batch()` 3 个公开方法；`app/api/routers/user.py` 新建 5 个 JWT 端点（GET/PUT settings、GET/PUT profile、DELETE profile field）；`app/api/main.py` 注册 user 路由 + `/profile` 页面路由。**前端**：`frontend/profile.html` 新建自包含页面（双卡片布局：基本信息 + 9 个画像字段，每字段含置信度徽标/保存/删除按钮）；`index.html` 侧边栏改造（头像区可点击 + hover 高亮 + 初始化加载 display_name）；`login.html` 登录/注册存储 `rag_user_id`。**设计要点**：利用已有 `users.display_name` 字段无需迁移；手动编辑默认 confidence=1.0（最高优先级）；空字符串自动触发删除；侧边栏 localStorage 快速路径避免闪烁。Chrome DevTools 实测：设置昵称"小予" → 侧边栏头像变"小"/名变"小予" ✅；年龄字段保存 28/删除 ✅；数据跨页面持久化 ✅。|
+| 2026-07-22 | 步骤 42 | **项目清理与同步**：删除 9 个无关文件（`=2.8.0`/`jindu.txt`/`进程.txt`/`data/uploads/`/`logs/`/`test_screenshots/`/`data/raw/*_test.txt`/`frontend/chat.html`/`tasks/triple_memory_plan.md`）。修复 Dockerfile 缺少 `COPY frontend/`（容器部署时前端页面 404）。`.env.example` 补充 `JWT_SECRET` 变量。README.md 全面同步：架构图四界面、新增用户系统与记忆体系章节、项目结构树补全 8 个新文件、API 表补全认证/会话/用户 15+ 端点、修正过时文件引用。**深度检查额外修复**：`mysql_init.sql` 缺 4 张用户系统表导致 Docker 新部署无法注册登录 → 补全 users/conversations/user_memories/user_profiles；`manage.html` 2 处注释引用已删除的 `chat.html` → 改为 `index.html`；README 新增"升级已有部署"章节。|

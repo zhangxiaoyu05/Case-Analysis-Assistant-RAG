@@ -226,3 +226,63 @@ def mock_redis():
     redis.aclose.return_value = None
     redis.ttl.return_value = 3600
     return redis
+
+
+# ============================================================
+# Phase 0 新增 fixtures
+# ============================================================
+@pytest.fixture
+def sample_user_data():
+    """测试用户数据。"""
+    return {
+        "username": "testuser",
+        "password": "1234",
+    }
+
+
+@pytest.fixture
+def sample_jwt_token(sample_user_data):
+    """生成测试 JWT token。"""
+    from app.services.user_manager import create_token
+
+    return create_token(user_id=1, username=sample_user_data["username"])
+
+
+@pytest.fixture
+def mock_mysql_for_users():
+    """Mock MySQLClient，返回模拟用户数据。"""
+    client = MagicMock()
+    client.connect.return_value = None
+    client.disconnect.return_value = None
+
+    # 模拟 cursor — 需要支持 context manager 协议
+    cursor = MagicMock()
+    cursor.lastrowid = 1
+    cursor.rowcount = 1
+    # cursor 作为 context manager 时 __enter__ 返回自身
+    cursor.__enter__.return_value = cursor
+    cursor.__exit__.return_value = None
+
+    cursor.fetchone.return_value = {
+        "id": 1,
+        "username": "testuser",
+        "password_hash": "pbkdf2:sha256:600000$" + "a" * 64 + "$" + "b" * 64,
+    }
+    # 用于 conversations 的 fetchall
+    cursor.fetchall.return_value = [
+        {
+            "id": 1,
+            "session_id": "abc123def456",
+            "title": "布洛芬用法用量咨询",
+            "is_active": True,
+            "created_at": "2026-07-22T10:00:00",
+            "updated_at": "2026-07-22T10:30:00",
+            "user_id": 1,
+        },
+    ]
+
+    conn = MagicMock()
+    conn.cursor.return_value = cursor
+    client.conn = conn
+
+    return client

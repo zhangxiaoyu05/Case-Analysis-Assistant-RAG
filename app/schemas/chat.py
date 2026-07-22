@@ -32,6 +32,10 @@ class ChatRequest(BaseModel):
         default=False,
         description="是否使用 SSE 流式返回（默认 false）",
     )
+    enable_memory: bool = Field(
+        default=True,
+        description="是否启用短期记忆（默认 true）。false 时 AI 不记住当前对话的上下文。",
+    )
 
 
 # ============================================================

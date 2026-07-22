@@ -140,6 +140,25 @@ class IntentClassifier:
                 logger.info(f"快速预判 — 闲聊（匹配问候模式）")
                 return IntentResult(intent="chitchat", confidence=0.95)
 
+        # 对话回忆类问题 — 用户回忆自己之前分享的个人/医疗信息
+        # 这些绝对不是攻击，安全地跳过 LLM 分类，直接归为 drug_inquiry
+        recall_patterns = [
+            # "我之前说/提到/问过 XXX 信息/过敏/病史" → 用户在回忆对话内容
+            r"我(刚才|之前|前面|上次)(说|提到|问|讲)(的|过)?.*(信息|过敏|病史|情况|内容|话|药)",
+            # "我的过敏/病史/用药是什么/有哪些"
+            r"(我的|我个人)(过敏|病史|用药|病历|健康|身体|信息).*(是什么|有什么|多少|哪些|还记得|吗)",
+            # "复述一下我的/我刚才的..."
+            r"复述.*(我的|我刚才|我之前)",
+            # "还记得/记不记得我的..."
+            r"(还记得|记不记得|记得吗).*(我的|我说|我提到|我的过敏|我的病史)",
+            # "告诉我/说说 我的/我说过的..."
+            r"(告诉我|说说|讲一下).*(我的|我说过|我提到过).*(信息|过敏|病史|情况)",
+        ]
+        for pattern in recall_patterns:
+            if re.search(pattern, query):
+                logger.info("快速预判 — 对话回忆（用户询问自身信息），归为 drug_inquiry")
+                return IntentResult(intent="drug_inquiry", confidence=0.85)
+
         # 明显的非药品问题关键词 → general（正常回答，不是拒答）
         general_patterns = [
             r"天气",
