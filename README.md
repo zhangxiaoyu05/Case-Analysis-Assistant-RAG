@@ -82,8 +82,8 @@
 | 用户认证 | JWT 登录/注册，bcrypt 密码哈希，7 天 token 有效期 |
 | 多会话管理 | 多对话窗口（创建/切换/删除），LLM 自动生成对话标题 |
 | 短期记忆 | Redis 滑动窗口 + qwen-flash 累积摘要，旧对话压缩注入 Prompt |
-| 中期记忆 | MySQL 持久化，5 种类型（药品关注/担忧顾虑/偏好倾向/用药计划/个人事实），每日衰减 ×0.95 |
-| 长期记忆 | EAV 模式的用户画像（9 个字段），LLM 自动提取 + 用户手动编辑，永不过期 |
+| 中期记忆 | MySQL 持久化，5 种类型（关注领域/临床疑难点/诊疗偏好/学习计划/执业特征），每日衰减 ×0.95 |
+| 长期记忆 | EAV 模式的医生执业画像（9 个字段：姓名/职称/科室/医院/专业领域/执业年限/指南偏好/患者群体/常见病种），LLM 自动提取 + 手动编辑，永不过期 |
 
 ### 安全防护
 
@@ -104,8 +104,8 @@
 ### 1. 克隆项目
 
 ```bash
-git clone https://github.com/zhangxiaoyu05/Medication-Instructions-RAG.git
-cd Medication-Instructions-RAG
+git clone git@github.com:zhangxiaoyu05/Case-Analysis-Assistant-RAG.git
+cd Case-Analysis-Assistant-RAG
 ```
 
 ### 2. 配置环境变量

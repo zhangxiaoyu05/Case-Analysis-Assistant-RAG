@@ -9,15 +9,11 @@
 ## 📌 项目概述
 
 - **项目名称**: RAG 临床病例分析助手（原 RAG 药品问答系统）
-- **当前版本**: v1.0.0-Phase2
+- **当前版本**: v1.0.0-Phase3
 - **项目路径**: `D:\RAG_project\`
 - **技术栈**: LangChain + LangGraph + Milvus + MySQL + Redis + Docker
 - **模型提供商**: 通义千问（DASHSCOPE_API_KEY）
   - 对话生成: qwen3-max | 门禁判断: qwen-flash | 病例提取: qwen-flash | 嵌入: text-embedding-v4 | 重排序: qwen3-rerank
-- **项目路径**: `D:\RAG_project\`
-- **技术栈**: LangChain + LangGraph + Milvus + MySQL + Redis + Docker
-- **模型提供商**: 通义千问（DASHSCOPE_API_KEY）
-  - 对话生成: qwen3.7-plus | 意图识别: qwen3.6-flash | 嵌入: text-embedding-v4 | 重排序: qwen3-rerank
 - **创建日期**: 2026-06-11
 
 ---
@@ -1005,7 +1001,7 @@ pytest tests/ --cov=app       # 含覆盖率报告（需 pytest-cov）
 - Swagger 文档: `http://localhost:8000/docs`
 
 
-## ✅ 项目状态：Phase 1 完成 + Phase 2 完成（50/50 步骤）
+## ✅ 项目状态：Phase 1 完成 + Phase 2 完成 + Phase 3 完成（51/51 步骤）
 
 | 模块 | 完成步骤 | 状态 |
 |------|----------|------|
