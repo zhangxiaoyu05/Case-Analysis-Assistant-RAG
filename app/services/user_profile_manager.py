@@ -1,11 +1,11 @@
 """
-长期记忆管理器 —— 用户画像（不可变人口属性）
+长期记忆管理器 —— 医生画像（执业信息）
 
 实现：
-- LLM 从每轮对话中异步提取用户明确陈述的个人基本信息
-- 新信息覆盖旧信息（用户最新陈述为准）
+- LLM 从每轮对话中异步提取医生明确陈述的执业信息
+- 新信息覆盖旧信息（医生最新陈述为准）
 - 无衰减（长期记忆永不过期）
-- 低置信度字段在 prompt 中标注"用户自称"
+- 低置信度字段在 prompt 中标注"医生自称"
 
 使用方式:
     from app.services.user_profile_manager import UserProfileManager
@@ -15,7 +15,7 @@
     # 对话完成后异步提取
     await manager.extract_and_save(user_id, session_id, user_msg, assistant_msg)
 
-    # 每次请求加载用户画像
+    # 每次请求加载医生画像
     profile_text = manager.format_profile_for_prompt(user_id)
 """
 
@@ -31,52 +31,58 @@ from app.config import config
 # ============================================================
 # 画像提取提示词
 # ============================================================
-_EXTRACT_SYSTEM_PROMPT = """你是一个用户画像提取助手。分析用户与药品知识问答助手的对话，提取用户**明确陈述**的个人基本信息。
+_EXTRACT_SYSTEM_PROMPT = """你是一个医生画像提取助手。分析医生与临床病例分析助手的对话，提取医生**明确陈述**的个人执业信息。
 
-可提取的字段（只提取用户明确说出的信息，绝对不要推测）：
-1. name — 用户姓名
-2. age — 年龄（数字）
-3. gender — 性别（男/女）
-4. birthday — 出生日期
-5. medical_history — 既往病史（如高血压、糖尿病、冠心病等）
-6. allergies — 过敏史（药物过敏、食物过敏等）
-7. current_medications — 当前正在使用的药物
-8. pregnancy_status — 孕产状态（备孕/怀孕/哺乳期）
-9. occupation — 职业
+可提取的字段（只提取医生明确说出的信息，绝对不要推测）：
+1. name — 姓名
+2. title — 职称（主任医师/副主任医师/主治医师/住院医师/临床药师等）
+3. department — 科室（心内科/内分泌科/呼吸科/ICU等）
+4. hospital — 所在医院/机构
+5. specialty — 专业领域（心力衰竭/介入心脏病学/糖尿病等）
+6. license_years — 执业年限（数字）
+7. guideline_preference — 指南使用偏好（中国指南/NICE/ESC/ACC-AHA等）
+8. patient_population — 主要患者群体（老年/儿童/孕产妇/重症等）
+9. common_diseases — 日常常见病种
 
 提取规则：
-- **只提取用户明确陈述的内容**，不要推测、不要推断
-- 每条记录带 confidence 评分（0.0~1.0），表示用户陈述的明确程度
-- 直接陈述 → confidence 0.8~1.0（如"我有高血压"→0.9）
-- 模糊陈述 → confidence 0.4~0.6（如"我好像有高血压"→0.5，"我妈说我血压有点高"→0.4）
+- **只提取医生明确陈述的内容**，不要推测、不要推断
+- 每条记录带 confidence 评分（0.0~1.0），表示医生陈述的明确程度
+- 直接陈述 → confidence 0.8~1.0（如"我是心内科的"→0.95）
+- 模糊陈述 → confidence 0.4~0.6（如"我好像提到过我在心内科"→0.5）
 - 间接提及但不是明确陈述 → 不要提取
 - 如果对话中没有可提取的个人信息，返回空数组 []
 
 返回格式：纯 JSON 数组，不要有其他文字。
 如果没有可提取的信息，返回 []。
 [
-  {"field_name": "medical_history", "field_value": "高血压", "confidence": 0.9},
-  {"field_name": "allergies", "field_value": "青霉素过敏", "confidence": 0.95}
+  {"field_name": "department", "field_value": "心血管内科", "confidence": 0.95},
+  {"field_name": "specialty", "field_value": "心力衰竭", "confidence": 0.9}
 ]"""
 
-# 有效的画像字段
+# 有效的画像字段（医生维度）
 _VALID_FIELDS = frozenset({
-    "name", "age", "gender", "birthday",
-    "medical_history", "allergies", "current_medications",
-    "pregnancy_status", "occupation",
+    "name",              # 姓名
+    "title",             # 职称（主任医师/副主任医师/主治医师/住院医师/临床药师...）
+    "department",        # 科室（心内科/内分泌科/呼吸科/ICU...）
+    "hospital",          # 所在医院/机构
+    "specialty",         # 专业领域（心力衰竭/介入心脏病学/糖尿病...）
+    "license_years",     # 执业年限
+    "guideline_preference", # 指南使用偏好（中国指南/NICE/ESC/ACC-AHA...）
+    "patient_population",   # 主要患者群体（老年/儿童/孕产妇/重症...）
+    "common_diseases",   # 日常常见病种
 })
 
 # 字段中文标签
 _FIELD_LABELS = {
     "name": "姓名",
-    "age": "年龄",
-    "gender": "性别",
-    "birthday": "出生日期",
-    "medical_history": "既往病史",
-    "allergies": "过敏史",
-    "current_medications": "当前用药",
-    "pregnancy_status": "孕产状态",
-    "occupation": "职业",
+    "title": "职称",
+    "department": "科室",
+    "hospital": "所在医院",
+    "specialty": "专业领域",
+    "license_years": "执业年限",
+    "guideline_preference": "指南偏好",
+    "patient_population": "患者群体",
+    "common_diseases": "常见病种",
 }
 
 
@@ -213,9 +219,9 @@ class UserProfileManager:
 
         Returns:
             格式化的画像文本，如：
-            "用户个人信息（基于对话中明确陈述的内容）：
-            - 既往病史：高血压
-            - 过敏史：青霉素过敏（用户自称）"
+            "医生执业信息（基于对话中明确陈述的内容）：
+            - 科室：心血管内科
+            - 专业领域：心力衰竭（医生自称）"
             无画像时返回空字符串。
         """
         profile = self.get_profile(user_id)
@@ -419,24 +425,24 @@ class UserProfileManager:
         将画像字典格式化为 prompt 友好文本。
 
         格式：
-            用户个人信息（基于对话中明确陈述的内容）：
-            - 既往病史：高血压
-            - 过敏史：青霉素过敏（用户自称）
-            - 当前用药：阿司匹林
+            医生执业信息（基于对话中明确陈述的内容）：
+            - 科室：心血管内科
+            - 专业领域：心力衰竭
+            - 职称：主任医师（医生自称）
 
-        低置信度（< 0.7）的字段标注"（用户自称）"。
+        低置信度（< 0.7）的字段标注"（医生自称）"。
         """
         if not profile:
             return ""
 
-        lines = ["\n用户个人信息（基于对话中明确陈述的内容）："]
+        lines = ["\n医生执业信息（基于对话中明确陈述的内容）："]
         for field_name, info in profile.items():
             label = _FIELD_LABELS.get(field_name, field_name)
             value = info["field_value"]
             confidence = info.get("confidence", 1.0)
 
             if confidence < 0.7:
-                lines.append(f"- {label}：{value}（用户自称）")
+                lines.append(f"- {label}：{value}（医生自称）")
             else:
                 lines.append(f"- {label}：{value}")
 

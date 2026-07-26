@@ -2,7 +2,7 @@
 
 > 本文件用于记录每一步操作，便于在新对话窗口中快速恢复上下文。
 > 每次操作后需同步更新此文件。
-> v1.0.0 Phase 1 完成时间：2026-07-25 | Phase 2 完成时间：2026-07-26 | 当前测试数：407 ✅
+> v1.0.0 Phase 1 完成时间：2026-07-25 | Phase 2 完成时间：2026-07-26 | Phase 3 完成时间：2026-07-26 | 当前测试数：407 ✅
 
 ---
 
@@ -2100,6 +2100,7 @@ if history and key == "dosage_followup":  # ← 条件过窄
 | 2026-07-25 | 步骤 48 | **Phase 2.3-2.6 — 数据库层扩展**：创建 `migration_v3.sql`（6 张新表 DDL + index_records 扩展）；`milvus_client.py` 支持多 collection（统一 schema 含 source_name/source_type/extra_field_1/extra_field_2）+ 向后兼容旧 drug_chunks；`mysql_client.py` 新增通用 CRUD 方法（generic 系列）；`init_milvus.py`/`init_collection.py` 支持 4 collection + 9 表。|
 | 2026-07-25 | 步骤 49 | **Phase 2.10-2.16 — Pipeline + 检索 + 前端 + CLI 多源扩展**：pipeline.py source_type 路由（4 种切分器 → 4 种表/collection）；retriever.py 新增 `retrieve_from` + `multi_source_retrieve`（4 collection 并行 + 跨源 RRF + 均衡采样）；nodes.py `multi_retrieve_node` 切换到真正多源；manage.html 多源 Tab + source_type 下拉 + 徽标；run_offline.py --source-type 参数。407 测试全通过。|
 | 2026-07-26 | 步骤 50 | **Phase 2 完成度验证 + Bug 修复**：逐一核对 Phase 2 全部 16 个子步骤（2.1-2.16）——MySQL 6 张新表 + Milvus 4 Collection 统一 schema + 3 种新切分器 + Pipeline source_type 路由 + 多源并行检索 + CLI/前端适配，全部完成。发现并修复 3 个 Bug：(1) `config.py` 5 个 multi_source 属性路径从 `database.milvus.multi_source.xxx` 修正为 `database.multi_source.xxx`（原路径指向不存在节点，配置从未生效）；(2) `nodes.py` `multi_retrieve_node` 硬编码 `top_n_per_source=3, final_top_n=10` 改为读取 `config.multi_source_top_n_per_source/final_top_n`；(3) `mysql_client.py` 移除 `bm25_search` 和 `bm25_search_generic` 中声明但未使用的 `query_escaped` 死代码。README.md 同步更新（测试数 407 + 项目结构补全 9 个新文件 + API 表补全 + 离线流程多源化）。407 测试全通过，零回归。|
+| 2026-07-26 | 步骤 51 | **Phase 3 — 记忆体系重构（患者→医生维度）**：将记忆系统和用户画像从患者维度改造为医生维度。**user_memory_manager.py**：`_EXTRACT_SYSTEM_PROMPT` 重写（提取医生临床关注点/疑难点/诊疗偏好/计划/执业特征）；memory_type 枚举 5 项全部重命名（`drug_interest`→`clinical_interest`、`concern`→`clinical_concern`、`preference`→`clinical_preference`、`plan`→`clinical_plan`、`fact`→`clinical_fact`）；`_format_memories_text` type_labels 和标题更新（"用户偏好/关注点"→"医生临床特征"）。**user_profile_manager.py**：`_EXTRACT_SYSTEM_PROMPT` 重写（提取医生执业信息）；`_VALID_FIELDS` 从 9 个患者字段改为 9 个医生字段（name/title/department/hospital/specialty/license_years/guideline_preference/patient_population/common_diseases）；`_FIELD_LABELS` 更新；`_format_profile_text` 标题更新（"用户个人信息"→"医生执业信息"）。**frontend/profile.html**：页面标题和卡片描述更新。**测试**：51 个记忆/画像测试全部更新匹配新枚举值/字段名。407 全量测试零回归。|
 
 ---
 
@@ -2109,5 +2110,5 @@ if history and key == "dosage_followup":  # ← 条件过窄
 |-------|------|:--:|
 | Phase 1 | 核心流程改造（8 节点 graph + 文件上传 + SOAP 模板） | ✅ |
 | Phase 2 | 多源知识库（4 Collection + 4 切分器 + 多路检索） | ✅ |
-| Phase 3 | 记忆体系重构（患者→医生维度） | ❌ 待实施 |
+| Phase 3 | 记忆体系重构（患者→医生维度） | ✅ |
 | Phase 4 | 前端完善 + 全量测试 + 文档 | ❌ 待实施 |

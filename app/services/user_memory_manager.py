@@ -1,8 +1,8 @@
 """
-中期记忆管理器 —— 跨会话用户动态记忆
+中期记忆管理器 —— 跨会话医生临床动态记忆
 
 实现：
-- LLM 从每轮对话中异步提取用户关注点/偏好/顾虑/事实
+- LLM 从每轮对话中异步提取医生的临床关注点/疑难点/诊疗偏好/计划/执业特征
 - 关键词重叠度 Upsert 合并去重
 - 每日衰减遗忘机制（×decay_factor）
 - Top-K 召回 + 重要性累加
@@ -15,7 +15,7 @@
     # 对话完成后异步提取
     await manager.extract_and_save(user_id, session_id, user_msg, assistant_msg)
 
-    # 每次请求加载用户记忆
+    # 每次请求加载医生记忆
     memories_text = manager.get_top_memories(user_id)
 """
 
@@ -33,27 +33,27 @@ from app.config import config
 # ============================================================
 # 记忆提取提示词
 # ============================================================
-_EXTRACT_SYSTEM_PROMPT = """你是一个用户记忆提取助手。分析用户与药品知识问答助手的对话，提取用户在对话中表现出的关键信息。
+_EXTRACT_SYSTEM_PROMPT = """你是一个医生画像提取助手。分析医生与临床病例分析助手的对话，提取医生在对话中表现出的关键特征。
 
 提取记忆类型（只提取确定的信息，不要推测）：
-1. **drug_interest** — 用户关注/询问过的药品名或药品类别
-2. **concern** — 用户表达的担忧、顾虑（如副作用担忧、价格顾虑、用药恐惧）
-3. **preference** — 用户表达的偏好（如偏好中成药、偏好便宜药、偏好某品牌）
-4. **plan** — 用户提到的用药计划或就医计划
-5. **fact** — 用户明确陈述的个人事实（如"我有高血压"、"我在哺乳期"、"我对青霉素过敏"）
+1. **clinical_interest** — 医生频繁关注的疾病领域或诊疗问题（如"心衰""糖尿病""抗菌药物"）
+2. **clinical_concern** — 医生表达的临床疑难点或不确定（如"对他汀不耐受的处理不确定"）
+3. **clinical_preference** — 医生表达的诊疗偏好或处方习惯（如"倾向使用ACEI而非ARB"）
+4. **clinical_plan** — 医生提到的学习研究计划（如"准备系统学习心衰指南"）
+5. **clinical_fact** — 医生的执业信息/科室特征（如"我们心内科CCU""常见糖尿病合并CKD患者"）
 
 提取规则：
-- 只提取用户明确陈述的内容，不要推测
+- 只提取医生明确陈述的内容，不要推测
 - 每条记忆 content 字段控制在 100 字以内
 - keywords 字段用逗号分隔 1-5 个关键词
-- 如果对话中没有有意义的信息（纯闲聊），返回空数组 []
-- 不要提取助手的回答内容，只提取用户表达的信息
+- 如果对话中没有有意义的信息，返回空数组 []
+- 不要提取助手的回答内容，只提取医生表达的信息
 
 返回格式：纯 JSON 数组，不要有其他文字。
 如果没有可提取的记忆，返回 []。
 [
-  {"memory_type": "drug_interest", "content": "用户正在了解阿司匹林的用法用量", "keywords": "阿司匹林,用法用量"},
-  {"memory_type": "fact", "content": "用户自述有高血压病史", "keywords": "高血压,病史"}
+  {"memory_type": "clinical_interest", "content": "医生关注慢性心力衰竭的GDMT方案", "keywords": "心衰,GDMT"},
+  {"memory_type": "clinical_preference", "content": "偏好使用SGLT2i作为心衰基础治疗", "keywords": "SGLT2i,心衰"}
 ]"""
 
 
@@ -138,12 +138,13 @@ class UserMemoryManager:
         # Upsert 每条记忆
         saved = []
         for mem in memories:
-            memory_type = mem.get("memory_type", "fact")
+            memory_type = mem.get("memory_type", "clinical_fact")
             content = (mem.get("content") or "").strip()[:500]
             keywords = (mem.get("keywords") or "").strip()[:300]
 
             if not content or memory_type not in (
-                "drug_interest", "concern", "preference", "plan", "fact"
+                "clinical_interest", "clinical_concern", "clinical_preference",
+                "clinical_plan", "clinical_fact",
             ):
                 continue
 
@@ -224,7 +225,7 @@ class UserMemoryManager:
 
         Returns:
             格式化的记忆文本，如：
-            "用户偏好/关注点：\n- 关注药品：阿司匹林、布洛芬\n- 用户自述有高血压病史"
+            "医生临床特征：\n- 关注领域：心衰、糖尿病\n- 倾向使用SGLT2i作为心衰基础治疗"
             无记忆时返回空字符串。
         """
         memories = self.get_top_memories(user_id, limit)
@@ -482,24 +483,24 @@ class UserMemoryManager:
         将记忆列表格式化为 prompt 友好文本。
 
         格式：
-            用户偏好/关注点（基于历史对话）：
-            - 关注药品：阿司匹林、布洛芬
-            - 用户自述有高血压病史
+            医生临床特征（基于历史对话）：
+            - 关注疾病：心衰、糖尿病
+            - 倾向使用SGLT2i作为心衰基础治疗
         """
         if not memories:
             return ""
 
-        lines = ["\n用户偏好/关注点（基于历史对话）："]
+        lines = ["\n医生临床特征（基于历史对话）："]
         for mem in memories:
             mtype = mem.get("memory_type", "")
             content = mem.get("content", "")
 
             type_labels = {
-                "drug_interest": "关注药品",
-                "concern": "用户顾虑",
-                "preference": "用户偏好",
-                "plan": "用药计划",
-                "fact": "用户事实",
+                "clinical_interest": "关注领域",
+                "clinical_concern": "临床疑难点",
+                "clinical_preference": "诊疗偏好",
+                "clinical_plan": "学习/研究计划",
+                "clinical_fact": "执业特征",
             }
             label = type_labels.get(mtype, mtype)
             lines.append(f"- [{label}] {content}")

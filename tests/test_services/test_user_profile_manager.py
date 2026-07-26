@@ -45,9 +45,9 @@ def mock_mysql_for_profile():
 # 样本数据
 # ============================================================
 _SAMPLE_PROFILE = {
-    "medical_history": {"field_value": "高血压", "confidence": 0.9},
-    "allergies": {"field_value": "青霉素过敏", "confidence": 0.95},
-    "age": {"field_value": "45", "confidence": 0.8},
+    "department": {"field_value": "心血管内科", "confidence": 0.95},
+    "specialty": {"field_value": "心力衰竭", "confidence": 0.9},
+    "title": {"field_value": "副主任医师", "confidence": 0.85},
 }
 
 
@@ -80,19 +80,19 @@ class TestGetProfile:
         """返回字段名 → 信息的字典。"""
         cursor = mock_mysql_for_profile.conn.cursor.return_value
         cursor.fetchall.return_value = [
-            {"field_name": "medical_history", "field_value": "高血压",
-             "confidence": 0.9},
-            {"field_name": "allergies", "field_value": "青霉素过敏",
+            {"field_name": "department", "field_value": "心血管内科",
              "confidence": 0.95},
+            {"field_name": "specialty", "field_value": "心力衰竭",
+             "confidence": 0.9},
         ]
 
         manager = UserProfileManager(mysql_client=mock_mysql_for_profile)
         result = manager.get_profile(1)
 
         assert isinstance(result, dict)
-        assert result["medical_history"]["field_value"] == "高血压"
-        assert result["medical_history"]["confidence"] == 0.9
-        assert result["allergies"]["field_value"] == "青霉素过敏"
+        assert result["department"]["field_value"] == "心血管内科"
+        assert result["department"]["confidence"] == 0.95
+        assert result["specialty"]["field_value"] == "心力衰竭"
 
     def test_empty_profile(self, mock_mysql_for_profile):
         """无画像时返回空字典。"""
@@ -117,33 +117,33 @@ class TestFormatProfileForPrompt:
         """包含中文标签的格式化文本。"""
         cursor = mock_mysql_for_profile.conn.cursor.return_value
         cursor.fetchall.return_value = [
-            {"field_name": "medical_history", "field_value": "高血压",
-             "confidence": 0.9},
-            {"field_name": "allergies", "field_value": "青霉素过敏",
+            {"field_name": "department", "field_value": "心血管内科",
              "confidence": 0.95},
+            {"field_name": "specialty", "field_value": "心力衰竭",
+             "confidence": 0.9},
         ]
 
         manager = UserProfileManager(mysql_client=mock_mysql_for_profile)
         result = manager.format_profile_for_prompt(1)
 
-        assert "用户个人信息" in result
-        assert "既往病史" in result
-        assert "高血压" in result
-        assert "过敏史" in result
-        assert "青霉素过敏" in result
+        assert "医生执业信息" in result
+        assert "科室" in result
+        assert "心血管内科" in result
+        assert "专业领域" in result
+        assert "心力衰竭" in result
 
     def test_low_confidence_annotation(self, mock_mysql_for_profile):
-        """低置信度字段标注'用户自称'。"""
+        """低置信度字段标注'医生自称'。"""
         cursor = mock_mysql_for_profile.conn.cursor.return_value
         cursor.fetchall.return_value = [
-            {"field_name": "medical_history", "field_value": "糖尿病",
+            {"field_name": "specialty", "field_value": "介入心脏病学",
              "confidence": 0.6},
         ]
 
         manager = UserProfileManager(mysql_client=mock_mysql_for_profile)
         result = manager.format_profile_for_prompt(1)
 
-        assert "（用户自称）" in result
+        assert "（医生自称）" in result
 
 
 # ============================================================
@@ -156,15 +156,15 @@ class TestGetField:
         """返回单个字段信息。"""
         cursor = mock_mysql_for_profile.conn.cursor.return_value
         cursor.fetchone.return_value = {
-            "field_name": "allergies", "field_value": "青霉素过敏",
+            "field_name": "department", "field_value": "心血管内科",
             "confidence": 0.95,
         }
 
         manager = UserProfileManager(mysql_client=mock_mysql_for_profile)
-        result = manager.get_field(1, "allergies")
+        result = manager.get_field(1, "department")
 
         assert result is not None
-        assert result["field_value"] == "青霉素过敏"
+        assert result["field_value"] == "心血管内科"
 
     def test_returns_none_for_missing(self, mock_mysql_for_profile):
         """不存在的字段返回 None。"""
@@ -185,7 +185,7 @@ class TestDeleteField:
         cursor.rowcount = 1
 
         manager = UserProfileManager(mysql_client=mock_mysql_for_profile)
-        result = manager.delete_field(1, "medical_history")
+        result = manager.delete_field(1, "department")
         assert result is True
 
     def test_delete_nonexistent(self, mock_mysql_for_profile):
@@ -210,11 +210,11 @@ class TestUpsertField:
         cursor.rowcount = 1  # 1 = INSERT
 
         manager = UserProfileManager(mysql_client=mock_mysql_for_profile)
-        result = manager._upsert_field(1, "medical_history", "高血压", 0.9)
+        result = manager._upsert_field(1, "department", "心血管内科", 0.95)
 
         assert result is not None
-        assert result["field_name"] == "medical_history"
-        assert result["field_value"] == "高血压"
+        assert result["field_name"] == "department"
+        assert result["field_value"] == "心血管内科"
         assert result["action"] == "新增"
 
     def test_update_existing(self, mock_mysql_for_profile):
@@ -223,10 +223,10 @@ class TestUpsertField:
         cursor.rowcount = 2  # 2 = ON DUPLICATE KEY UPDATE
 
         manager = UserProfileManager(mysql_client=mock_mysql_for_profile)
-        result = manager._upsert_field(1, "medical_history", "糖尿病", 0.8)
+        result = manager._upsert_field(1, "department", "呼吸与危重症医学科", 0.8)
 
         assert result is not None
-        assert result["field_value"] == "糖尿病"
+        assert result["field_value"] == "呼吸与危重症医学科"
         assert result["action"] == "更新"
 
 
@@ -243,28 +243,28 @@ class TestFormatProfileText:
     def test_formats_multiple_fields(self):
         """多字段格式化。"""
         result = UserProfileManager._format_profile_text(_SAMPLE_PROFILE)
-        assert "既往病史" in result
-        assert "高血压" in result
-        assert "过敏史" in result
-        assert "青霉素过敏" in result
-        assert "年龄" in result
-        assert "45" in result
+        assert "科室" in result
+        assert "心血管内科" in result
+        assert "专业领域" in result
+        assert "心力衰竭" in result
+        assert "职称" in result
+        assert "副主任医师" in result
 
     def test_low_confidence_adds_suffix(self):
-        """confidence < 0.7 添加'（用户自称）'。"""
+        """confidence < 0.7 添加'（医生自称）'。"""
         profile = {
-            "medical_history": {"field_value": "糖尿病", "confidence": 0.5},
+            "specialty": {"field_value": "介入心脏病学", "confidence": 0.5},
         }
         result = UserProfileManager._format_profile_text(profile)
-        assert "（用户自称）" in result
+        assert "（医生自称）" in result
 
     def test_high_confidence_no_suffix(self):
         """confidence >= 0.7 不添加后缀。"""
         profile = {
-            "medical_history": {"field_value": "高血压", "confidence": 0.9},
+            "department": {"field_value": "心血管内科", "confidence": 0.95},
         }
         result = UserProfileManager._format_profile_text(profile)
-        assert "（用户自称）" not in result
+        assert "（医生自称）" not in result
 
     def test_unknown_field_uses_raw_name(self):
         """未知字段使用原始字段名。"""
@@ -296,15 +296,15 @@ class TestExtractAndSave:
 
         with patch.object(UserProfileManager, "_extract_via_llm") as mock_extract:
             mock_extract.return_value = [
-                {"field_name": "medical_history", "field_value": "高血压",
-                 "confidence": 0.9},
-                {"field_name": "allergies", "field_value": "青霉素过敏",
+                {"field_name": "department", "field_value": "心血管内科",
                  "confidence": 0.95},
+                {"field_name": "specialty", "field_value": "心力衰竭",
+                 "confidence": 0.9},
             ]
 
             manager = UserProfileManager(mysql_client=mock_mysql_for_profile)
             result = await manager.extract_and_save(
-                1, "sess_abc", "我有高血压，对青霉素过敏", "了解..."
+                1, "sess_abc", "我是心内科的，专攻心衰方向", "了解..."
             )
 
             assert len(result) == 2
@@ -343,11 +343,11 @@ class TestExtractAndSave:
 
         with patch.object(UserProfileManager, "_extract_via_llm") as mock_extract:
             mock_extract.return_value = [
-                {"field_name": "medical_history", "content": "有效",
-                 "confidence": 0.9},
-                {"field_name": "invalid_field_name", "content": "无效",
+                {"field_name": "department", "field_value": "心血管内科",
+                 "confidence": 0.95},
+                {"field_name": "invalid_field_name", "field_value": "无效",
                  "confidence": 0.8},
-                {"field_name": "", "content": "空字段名", "confidence": 0.5},
+                {"field_name": "", "field_value": "空字段名", "confidence": 0.5},
             ]
 
             manager = UserProfileManager(mysql_client=mock_mysql_for_profile)
@@ -356,9 +356,9 @@ class TestExtractAndSave:
             )
 
             # 只保存 valid field_name 且 confidence >= min_confidence 的
-            # 注意：mock 返回的 dict 用 "content" 而不是 "field_value"
-            # 所以会因 field_value 为空被过滤。这里验证 invalid_field_name 和空字段名被过滤
-            assert len(result) <= 1  # invalid fields filtered out
+            # invalid_field_name 和空字段名被过滤
+            # 注意：空字段名的 confidence=0.5 >= min_confidence(0.5)，但 field_name 为空会被跳过
+            assert len(result) == 1  # only department is valid
 
     @pytest.mark.asyncio
     async def test_filters_low_confidence(self, mock_mysql_for_profile):
@@ -368,20 +368,20 @@ class TestExtractAndSave:
 
         with patch.object(UserProfileManager, "_extract_via_llm") as mock_extract:
             mock_extract.return_value = [
-                {"field_name": "medical_history", "field_value": "高血压",
-                 "confidence": 0.9},
-                {"field_name": "allergies", "field_value": "花粉过敏",
+                {"field_name": "department", "field_value": "心血管内科",
+                 "confidence": 0.95},
+                {"field_name": "specialty", "field_value": "心律失常",
                  "confidence": 0.3},  # 低于 min_confidence=0.5
             ]
 
             manager = UserProfileManager(mysql_client=mock_mysql_for_profile)
             result = await manager.extract_and_save(
-                1, "sess_abc", "我有高血压", "了解..."
+                1, "sess_abc", "我是心内科的", "了解..."
             )
 
             # 只保存 confidence >= 0.5 的
             assert len(result) == 1
-            assert result[0]["field_name"] == "medical_history"
+            assert result[0]["field_name"] == "department"
 
 
 # ============================================================

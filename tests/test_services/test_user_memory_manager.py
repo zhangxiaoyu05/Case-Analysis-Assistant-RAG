@@ -48,18 +48,18 @@ def mock_mysql_for_memories():
 # ============================================================
 _SAMPLE_MEMORIES = [
     {
-        "id": 1, "memory_type": "drug_interest", "content": "关注阿司匹林用法用量",
-        "keywords": "阿司匹林,用法用量", "importance_score": 1.0,
+        "id": 1, "memory_type": "clinical_interest", "content": "医生关注慢性心衰GDMT方案",
+        "keywords": "心衰,GDMT", "importance_score": 1.0,
         "source_session_id": "abc123", "access_count": 2,
     },
     {
-        "id": 2, "memory_type": "fact", "content": "用户自述有高血压病史",
-        "keywords": "高血压,病史", "importance_score": 0.9,
+        "id": 2, "memory_type": "clinical_fact", "content": "医生在心内科CCU工作",
+        "keywords": "心内科,CCU", "importance_score": 0.9,
         "source_session_id": "abc123", "access_count": 1,
     },
     {
-        "id": 3, "memory_type": "concern", "content": "担心药物副作用",
-        "keywords": "副作用,担忧", "importance_score": 0.7,
+        "id": 3, "memory_type": "clinical_concern", "content": "对他汀不耐受的处理不确定",
+        "keywords": "他汀,不耐受", "importance_score": 0.7,
         "source_session_id": "def456", "access_count": 0,
     },
 ]
@@ -102,8 +102,8 @@ class TestGetTopMemories:
         result = manager.get_top_memories(1, limit=3)
 
         assert len(result) == 3
-        assert result[0]["memory_type"] == "drug_interest"
-        assert result[0]["content"] == "关注阿司匹林用法用量"
+        assert result[0]["memory_type"] == "clinical_interest"
+        assert result[0]["content"] == "医生关注慢性心衰GDMT方案"
 
     def test_returns_empty_list(self, mock_mysql_for_memories):
         """无记忆时返回空列表。"""
@@ -143,11 +143,11 @@ class TestFormatMemoriesForPrompt:
         manager = UserMemoryManager(mysql_client=mock_mysql_for_memories)
         result = manager.format_memories_for_prompt(1)
 
-        assert "用户偏好/关注点" in result
-        assert "[关注药品]" in result
-        assert "[用户事实]" in result
-        assert "阿司匹林" in result
-        assert "高血压" in result
+        assert "医生临床特征" in result
+        assert "[关注领域]" in result
+        assert "[执业特征]" in result
+        assert "心衰" in result
+        assert "心内科" in result
 
 
 # ============================================================
@@ -163,9 +163,9 @@ class TestFormatMemoriesText:
     def test_formats_multiple_types(self):
         """多类型格式化。"""
         result = UserMemoryManager._format_memories_text(_SAMPLE_MEMORIES[:3])
-        assert "[关注药品]" in result
-        assert "[用户事实]" in result
-        assert "[用户顾虑]" in result
+        assert "[关注领域]" in result
+        assert "[执业特征]" in result
+        assert "[临床疑难点]" in result
 
     def test_unknown_type_uses_raw_value(self):
         """未知类型使用原始值。"""
@@ -228,25 +228,25 @@ class TestUpsertMemory:
         """无已有记忆 → 新增。"""
         manager = UserMemoryManager(mysql_client=mock_mysql_for_memories)
         result = manager._upsert_memory(
-            1, "fact", "用户有高血压", "高血压", "sess_abc"
+            1, "clinical_fact", "医生在心内科CCU工作", "心内科,CCU", "sess_abc"
         )
 
         assert result is not None
         assert result["merged"] is False
-        assert result["memory_type"] == "fact"
+        assert result["memory_type"] == "clinical_fact"
 
     def test_merge_high_overlap(self, mock_mysql_for_memories):
         """关键词高度重叠 → 合并。"""
         cursor = mock_mysql_for_memories.conn.cursor.return_value
-        # 已有记忆：keywords="高血压,病史"
+        # 已有记忆：keywords="心衰,GDMT"
         cursor.fetchall.return_value = [
-            {"id": 10, "content": "用户自述高血压", "keywords": "高血压,病史",
+            {"id": 10, "content": "医生关注心衰治疗", "keywords": "心衰,GDMT",
              "importance_score": 0.5},
         ]
 
         manager = UserMemoryManager(mysql_client=mock_mysql_for_memories)
         result = manager._upsert_memory(
-            1, "fact", "用户有高血压病史多年", "高血压,病史,慢性病", "sess_new"
+            1, "clinical_interest", "医生关注慢性心衰的GDMT方案", "心衰,GDMT,慢性病", "sess_new"
         )
 
         assert result is not None
@@ -256,15 +256,15 @@ class TestUpsertMemory:
         """关键词重叠度低 → 不合并（新增）。"""
         cursor = mock_mysql_for_memories.conn.cursor.return_value
         cursor.fetchall.return_value = [
-            {"id": 10, "content": "用户关注阿司匹林", "keywords": "阿司匹林",
+            {"id": 10, "content": "医生关注心衰治疗", "keywords": "心衰,GDMT",
              "importance_score": 0.5},
         ]
 
         manager = UserMemoryManager(mysql_client=mock_mysql_for_memories)
         result = manager._upsert_memory(
-            1, "fact", "用户有高血压", "高血压,病史", "sess_new"
+            1, "clinical_fact", "医生在心内科CCU工作", "心内科,CCU", "sess_new"
         )
-        # 关键词 "阿司匹林" vs "高血压,病史" → 重叠 0
+        # 关键词 "心衰,GDMT" vs "心内科,CCU" → 重叠 0
         assert result is not None
         assert result["merged"] is False
 
@@ -312,10 +312,10 @@ class TestExtractAndSave:
         """正常提取并保存。"""
         with patch.object(UserMemoryManager, "_extract_via_llm") as mock_extract:
             mock_extract.return_value = [
-                {"memory_type": "drug_interest", "content": "关注阿司匹林",
-                 "keywords": "阿司匹林"},
-                {"memory_type": "fact", "content": "用户有高血压",
-                 "keywords": "高血压"},
+                {"memory_type": "clinical_interest", "content": "医生关注心衰GDMT方案",
+                 "keywords": "心衰,GDMT"},
+                {"memory_type": "clinical_fact", "content": "医生在心内科CCU工作",
+                 "keywords": "心内科,CCU"},
             ]
 
             manager = UserMemoryManager(mysql_client=mock_mysql_for_memories)
@@ -356,7 +356,7 @@ class TestExtractAndSave:
         """过滤无效的记忆类型。"""
         with patch.object(UserMemoryManager, "_extract_via_llm") as mock_extract:
             mock_extract.return_value = [
-                {"memory_type": "drug_interest", "content": "有效",
+                {"memory_type": "clinical_interest", "content": "有效",
                  "keywords": "test"},
                 {"memory_type": "invalid_type", "content": "无效",
                  "keywords": "test"},
@@ -368,9 +368,9 @@ class TestExtractAndSave:
                 1, "sess_abc", "测试问题", "测试回答"
             )
 
-            # 只保存 drug_interest，过滤掉 invalid_type 和空类型
+            # 只保存 clinical_interest，过滤掉 invalid_type 和空类型
             assert len(result) == 1
-            assert result[0]["memory_type"] == "drug_interest"
+            assert result[0]["memory_type"] == "clinical_interest"
 
 
 # ============================================================
