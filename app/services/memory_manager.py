@@ -218,8 +218,9 @@ class MemoryManager:
             # 即使只剩最后几轮也超过 target → 保留最后 2 轮
             entries_to_keep = min(4, total_entries)
 
-        # 确保至少保留 2 轮（4 条）
-        entries_to_keep = max(entries_to_keep, min(4, total_entries))
+        # 确保至少保留 recent_turns 轮（取配置值与实际条目数的较小值）
+        min_entries = min(self._recent_turns * 2, total_entries)
+        entries_to_keep = max(entries_to_keep, min_entries)
 
         old_entries = history[:-entries_to_keep] if entries_to_keep < total_entries else []
         recent_entries = history[-entries_to_keep:]

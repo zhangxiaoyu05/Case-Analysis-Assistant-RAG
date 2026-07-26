@@ -219,19 +219,64 @@ class UserMemoryManager:
             for row in rows
         ]
 
-    def format_memories_for_prompt(self, user_id: int, limit: int | None = None) -> str:
+    def format_memories_for_prompt(
+        self, user_id: int, limit: int | None = None, max_tokens: int | None = None
+    ) -> str:
         """
-        获取用户记忆并格式化为 prompt 友好的文本。
+        获取用户记忆并格式化为 prompt 友好的文本，支持 token 预算截断。
+
+        Args:
+            user_id: 用户 ID
+            limit: 召回条数（默认从 config 读取）
+            max_tokens: token 预算上限（默认从 config 读取），超出则逐条截断
 
         Returns:
-            格式化的记忆文本，如：
-            "医生临床特征：\n- 关注领域：心衰、糖尿病\n- 倾向使用SGLT2i作为心衰基础治疗"
-            无记忆时返回空字符串。
+            格式化的记忆文本。无记忆时返回空字符串。
         """
+        if max_tokens is None:
+            max_tokens = config.user_memory_max_tokens_in_prompt
+
         memories = self.get_top_memories(user_id, limit)
         if not memories:
             return ""
-        return self._format_memories_text(memories)
+
+        from app.services.memory_manager import estimate_tokens
+
+        header = "\n医生临床特征（基于历史对话）：\n"
+        current_tokens = estimate_tokens(header)
+        lines = []
+
+        type_labels = {
+            "clinical_interest": "关注领域",
+            "clinical_concern": "临床疑难点",
+            "clinical_preference": "诊疗偏好",
+            "clinical_plan": "学习/研究计划",
+            "clinical_fact": "执业特征",
+        }
+
+        truncated = False
+        for mem in memories:
+            mtype = mem.get("memory_type", "")
+            content = mem.get("content", "")
+            label = type_labels.get(mtype, mtype)
+            line = f"- [{label}] {content}\n"
+            line_tokens = estimate_tokens(line)
+
+            if current_tokens + line_tokens > max_tokens:
+                truncated = True
+                break
+
+            lines.append(line)
+            current_tokens += line_tokens
+
+        if not lines:
+            return ""
+
+        result = header + "".join(lines)
+        if truncated:
+            result += "…(记忆已截断)\n"
+
+        return result
 
     def apply_decay(self, user_id: int) -> dict:
         """

@@ -27,6 +27,25 @@ _TABLE_SOURCE_TYPE_MAP = {
     "literature_chunks": "literature",
 }
 
+# MySQL BOOLEAN MODE 运算符，需转义避免被误解析
+_BOOLEAN_MODE_OPERATORS = str.maketrans({
+    '+': r'\+',
+    '-': r'\-',
+    '>': r'\>',
+    '<': r'\<',
+    '(': r'\(',
+    ')': r'\)',
+    '~': r'\~',
+    '*': r'\*',
+    '"': r'\"',
+    '@': r'\@',
+})
+
+
+def _escape_boolean_mode(query: str) -> str:
+    """转义 MySQL BOOLEAN MODE 中的特殊运算符字符。"""
+    return query.translate(_BOOLEAN_MODE_OPERATORS)
+
 # v1.0.0: 每个 source_type 的 chunks 表 + raw_docs 表
 _SOURCE_CHUNKS_TABLE = {
     "drug": "drug_chunks",
@@ -340,7 +359,8 @@ class MySQLClient:
         MySQL 全文检索（BM25 算法）
 
         使用 MATCH ... AGAINST 配合 ngram parser
-        返回按 BM25 相关性得分排序的结果
+        返回按 BM25 相关性得分排序的结果。
+        优先 BOOLEAN MODE（支持精确匹配），返回 0 条时回退 NATURAL LANGUAGE MODE。
 
         Args:
             query: 搜索查询文本
@@ -353,30 +373,81 @@ class MySQLClient:
         if top_k is None:
             top_k = config.retrieval_bm25_top_k
 
-        # 对查询进行简单处理，适配 ngram 全文搜索
-        # BOOLEAN MODE 支持 +must -not 等操作符
+        # 转义 BOOLEAN MODE 特殊字符（+ - > < ( ) ~ * " @）
+        escaped_query = _escape_boolean_mode(query)
 
-        if drug_name:
+        # 优先 BOOLEAN MODE
+        results = self._bm25_search_internal(
+            table=self._chunks_table,
+            query=escaped_query,
+            top_k=top_k,
+            mode="BOOLEAN",
+            filter_field="drug_name" if drug_name else None,
+            filter_value=drug_name,
+        )
+
+        # BOOLEAN MODE 返回 0 条 → 回退 NATURAL LANGUAGE MODE
+        if not results:
+            logger.info(
+                f"BM25 BOOLEAN MODE 无结果 (query={query[:60]}...)，"
+                f"回退 NATURAL LANGUAGE MODE"
+            )
+            results = self._bm25_search_internal(
+                table=self._chunks_table,
+                query=query,  # NATURAL LANGUAGE MODE 不需要转义
+                top_k=top_k,
+                mode="NATURAL",
+                filter_field="drug_name" if drug_name else None,
+                filter_value=drug_name,
+            )
+
+        return results
+
+    # ============================================================
+    # v1.0.0: 通用多源操作方法
+    # ============================================================
+    def _bm25_search_internal(
+        self,
+        table: str,
+        query: str,
+        top_k: int,
+        mode: str = "BOOLEAN",
+        filter_field: Optional[str] = None,
+        filter_value: Optional[str] = None,
+    ) -> list[dict]:
+        """
+        BM25 检索内部实现，支持 BOOLEAN / NATURAL LANGUAGE 两种模式。
+
+        Args:
+            table: 表名
+            query: 搜索查询文本
+            top_k: 返回 Top-K
+            mode: "BOOLEAN" 或 "NATURAL"
+            filter_field: 可选过滤字段
+            filter_value: 可选过滤值
+
+        Returns:
+            检索结果列表
+        """
+        mode_clause = f"IN {mode} LANGUAGE MODE" if mode == "NATURAL" else "IN BOOLEAN MODE"
+
+        if filter_field and filter_value:
             sql = f"""
-                SELECT
-                    id, doc_id, drug_name, section, chunk_text, chunk_index,
-                    MATCH(chunk_text) AGAINST(%s IN BOOLEAN MODE) AS bm25_score
-                FROM {self._chunks_table}
-                WHERE MATCH(chunk_text) AGAINST(%s IN BOOLEAN MODE)
-                  AND drug_name = %s
+                SELECT *, MATCH(chunk_text) AGAINST(%s {mode_clause}) AS bm25_score
+                FROM {table}
+                WHERE MATCH(chunk_text) AGAINST(%s {mode_clause})
+                  AND {filter_field} = %s
                 ORDER BY bm25_score DESC
                 LIMIT %s
             """
             with self.conn.cursor() as cursor:
-                cursor.execute(sql, (query, query, drug_name, top_k))
+                cursor.execute(sql, (query, query, filter_value, top_k))
                 return cursor.fetchall()
         else:
             sql = f"""
-                SELECT
-                    id, doc_id, drug_name, section, chunk_text, chunk_index,
-                    MATCH(chunk_text) AGAINST(%s IN BOOLEAN MODE) AS bm25_score
-                FROM {self._chunks_table}
-                WHERE MATCH(chunk_text) AGAINST(%s IN BOOLEAN MODE)
+                SELECT *, MATCH(chunk_text) AGAINST(%s {mode_clause}) AS bm25_score
+                FROM {table}
+                WHERE MATCH(chunk_text) AGAINST(%s {mode_clause})
                 ORDER BY bm25_score DESC
                 LIMIT %s
             """
@@ -384,9 +455,6 @@ class MySQLClient:
                 cursor.execute(sql, (query, query, top_k))
                 return cursor.fetchall()
 
-    # ============================================================
-    # v1.0.0: 通用多源操作方法
-    # ============================================================
     def insert_raw_doc_generic(
         self,
         source_type: str,
@@ -467,6 +535,8 @@ class MySQLClient:
         """
         通用 BM25 检索，根据 source_type 路由到对应 chunks 表。
 
+        优先 BOOLEAN MODE，返回 0 条时回退 NATURAL LANGUAGE MODE。
+
         Args:
             source_type: "drug" / "disease" / "guideline" / "literature"
             query: 搜索查询文本
@@ -481,29 +551,35 @@ class MySQLClient:
         if not table:
             raise ValueError(f"未知的 source_type: {source_type}")
 
-        if filter_field and filter_value:
-            sql = f"""
-                SELECT *, MATCH(chunk_text) AGAINST(%s IN BOOLEAN MODE) AS bm25_score
-                FROM {table}
-                WHERE MATCH(chunk_text) AGAINST(%s IN BOOLEAN MODE)
-                  AND {filter_field} = %s
-                ORDER BY bm25_score DESC
-                LIMIT %s
-            """
-            with self.conn.cursor() as cursor:
-                cursor.execute(sql, (query, query, filter_value, top_k))
-                return cursor.fetchall()
-        else:
-            sql = f"""
-                SELECT *, MATCH(chunk_text) AGAINST(%s IN BOOLEAN MODE) AS bm25_score
-                FROM {table}
-                WHERE MATCH(chunk_text) AGAINST(%s IN BOOLEAN MODE)
-                ORDER BY bm25_score DESC
-                LIMIT %s
-            """
-            with self.conn.cursor() as cursor:
-                cursor.execute(sql, (query, query, top_k))
-                return cursor.fetchall()
+        # 转义 BOOLEAN MODE 特殊字符
+        escaped_query = _escape_boolean_mode(query)
+
+        # 优先 BOOLEAN MODE
+        results = self._bm25_search_internal(
+            table=table,
+            query=escaped_query,
+            top_k=top_k,
+            mode="BOOLEAN",
+            filter_field=filter_field,
+            filter_value=filter_value,
+        )
+
+        # BOOLEAN MODE 返回 0 条 → 回退 NATURAL LANGUAGE MODE
+        if not results:
+            logger.info(
+                f"BM25[{source_type}] BOOLEAN MODE 无结果 "
+                f"(query={query[:60]}...)，回退 NATURAL LANGUAGE MODE"
+            )
+            results = self._bm25_search_internal(
+                table=table,
+                query=query,  # NATURAL LANGUAGE MODE 不需要转义
+                top_k=top_k,
+                mode="NATURAL",
+                filter_field=filter_field,
+                filter_value=filter_value,
+            )
+
+        return results
 
     def delete_by_id_generic(
         self,

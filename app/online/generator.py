@@ -428,11 +428,11 @@ class Generator:
         prompt_config = _CHAT_PROMPTS.get(key, _CHAT_PROMPTS["case_summary"])
         template_text = prompt_config["user"]
 
-        # 格式化近期对话历史
+        # 格式化近期对话历史（长度由 memory_manager 的 recent_turns 控制）
         history_text = ""
         if history:
             history_parts: list[str] = []
-            for turn in history[-6:]:
+            for turn in history:
                 role = "用户" if turn.get("role") == "user" else "助手"
                 content = turn.get("content", "")
                 history_parts.append(f"{role}: {content}")

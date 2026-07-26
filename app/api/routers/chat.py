@@ -172,13 +172,15 @@ async def _load_context(
         if memory_summary != existing_summary:
             await history_manager.set_summary(user_id, session_id, memory_summary)
 
-    # 加载跨会话中期记忆
+    # 加载跨会话中期记忆（带 token 预算）
     user_memories_text = ""
     try:
         from app.services.user_memory_manager import UserMemoryManager
         umm = UserMemoryManager()
         try:
-            user_memories_text = umm.format_memories_for_prompt(user_id)
+            user_memories_text = umm.format_memories_for_prompt(
+                user_id, max_tokens=config.user_memory_max_tokens_in_prompt
+            )
             if user_memories_text:
                 logger.debug(f"[{session_id}] 中期记忆已加载: {len(user_memories_text)} 字符")
         finally:
@@ -186,13 +188,15 @@ async def _load_context(
     except Exception as e:
         logger.warning(f"[{session_id}] 中期记忆加载失败: {e}")
 
-    # 加载用户长期画像
+    # 加载用户长期画像（带 token 预算）
     user_profile_text = ""
     try:
         from app.services.user_profile_manager import UserProfileManager
         upm = UserProfileManager()
         try:
-            user_profile_text = upm.format_profile_for_prompt(user_id)
+            user_profile_text = upm.format_profile_for_prompt(
+                user_id, max_tokens=config.user_profile_max_tokens_in_prompt
+            )
             if user_profile_text:
                 logger.debug(f"[{session_id}] 用户画像已加载: {len(user_profile_text)} 字符")
         finally:

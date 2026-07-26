@@ -2,14 +2,14 @@
 
 > 本文件用于记录每一步操作，便于在新对话窗口中快速恢复上下文。
 > 每次操作后需同步更新此文件。
-> v1.0.0 Phase 1 完成时间：2026-07-25 | Phase 2 完成时间：2026-07-26 | Phase 3 完成时间：2026-07-26 | Phase 4 完成时间：2026-07-26 | v1.1.0 完成时间：2026-07-26 | v1.1.1 完成时间：2026-07-26 | 当前测试数：407 ✅
+> v1.0.0 Phase 1 完成时间：2026-07-25 | Phase 2 完成时间：2026-07-26 | Phase 3 完成时间：2026-07-26 | Phase 4 完成时间：2026-07-26 | v1.1.0 完成时间：2026-07-26 | v1.1.1 完成时间：2026-07-26 | v1.1.2 完成时间：2026-07-26 | 当前测试数：407 ✅
 
 ---
 
 ## 📌 项目概述
 
 - **项目名称**: RAG 临床病例分析助手（原 RAG 药品问答系统）
-- **当前版本**: v1.1.0（v1.0.0 Phase 1-4 完成 + v1.1.0 自动分类 + 切分器增强）
+- **当前版本**: v1.1.2（v1.1.1 + 上下文窗口管理全面优化）
 - **项目路径**: `D:\RAG_project\`
 - **技术栈**: LangChain + LangGraph + Milvus + MySQL + Redis + Docker
 - **模型提供商**: 通义千问（DASHSCOPE_API_KEY）
@@ -2318,3 +2318,61 @@ if history and key == "dosage_followup":  # ← 条件过窄
 | 自动标题生成 | ✅ |
 
 **四种分析模式行为验证**: 综合分析/鉴别诊断/诊疗评估/用药审查四种模式通过 5 个不同的 system prompt 模板驱动不同输出结构，检索查询构建中 drug_review 模式自动追加药物相互作用查询，差异在生成层显著、检索层可进一步优化。
+
+---
+
+### 步骤 57: v1.1.2 — 上下文窗口管理全面优化
+
+**操作时间**: 2026-07-26
+
+**问题**: (1) BM25 返回 0 结果 — BOOLEAN MODE 特殊字符未转义且无 fallback；(2) `chat.max_tokens: 2000` 偏小，长篇 SOAP 报告被截断；(3) `context_window_tokens: 8192` 浪费 qwen3-max 32K 能力；(4) 中期记忆/用户画像无 token 预算；(5) `history[-6:]` 硬截断与 `recent_turns` 冲突。
+
+**Token 估算（4-6 轮临床病例对话）**:
+
+| 场景 | 每轮用户 | 每轮助手 | 单轮合计 | 6 轮总计（含开销） |
+|------|---------|---------|---------|------------------|
+| 典型 | ~333 | ~2,000 | ~2,333 | **~17,998** |
+| 最差 | ~1,350 | ~4,100 | ~5,450 | **~38,350** |
+
+**修复**:
+
+| 文件 | 改动 |
+|------|------|
+| `config/config.yaml` | `chat.max_tokens` 2000→4096；`memory.recent_turns` 4→6；`memory.context_window_tokens` 8192→16384；新增 `user_memory.max_tokens_in_prompt: 600` + `user_profile.max_tokens_in_prompt: 300` |
+| `app/config.py` | 新增 `user_memory_max_tokens_in_prompt`、`user_profile_max_tokens_in_prompt` 两个 property |
+| `app/db/mysql_client.py` | 新增 `_escape_boolean_mode()` 转义 BOOLEAN MODE 运算符；新增 `_bm25_search_internal()` 内部方法；`bm25_search()` 和 `bm25_search_generic()` 增加 NATURAL LANGUAGE MODE fallback |
+| `app/services/memory_manager.py` | 硬编码 `min(4, ...)` → `min(self._recent_turns * 2, total_entries)` |
+| `app/online/generator.py` | 移除 `history[-6:]` 硬截断，由 memory_manager 统一控制 |
+| `app/services/user_memory_manager.py` | `format_memories_for_prompt()` 新增 `max_tokens` 参数，逐条累计 token，超预算截断 |
+| `app/services/user_profile_manager.py` | `format_profile_for_prompt()` 新增 `max_tokens` 参数，逻辑同上 |
+| `app/api/routers/chat.py` | `_load_context()` 传递 `max_tokens` 到记忆/画像格式化方法 |
+| `tests/.../test_memory_manager.py` | 修复 `test_summary_with_query` 增加 `recent_turns=1` 适配新默认值 |
+
+**验证**: 407 tests 全通过，零回归。
+
+---
+
+### 步骤 58: 项目清理 — 删除无用文件
+
+**操作时间**: 2026-07-26
+
+**删除清单**:
+
+| 文件/目录 | 数量 | 说明 |
+|-----------|------|------|
+| `__pycache__/` | 16 个目录 | Python 字节码缓存（可重新生成） |
+| `.pytest_cache/` | 1 个目录 | pytest 缓存 |
+| `test_screenshots/` | 3 个文件 | Chrome DevTools 测试截图残留 |
+| `data/test_case.*` | 3 个文件 | 测试用病例文件（已无引用） |
+| `data/uploads/` | 1 残留文件 + 空目录 | 上传目录残留 |
+| `PLAN_v1.0.0_case_analysis.md` | 1 个文件 | v1.0.0 临时规划文档，已被 v1.1.x 覆盖 |
+| `~/` | 1 个误创建目录 | 含空 `.ssh/` 子目录，Shell 波浪号展开误创建 |
+| 空目录（`data/uploads/`） | 1 个 | 运行时自动创建，无需版本控制 |
+
+**保留**:
+- `.venv/` — Python 虚拟环境（依赖 pip 包）
+- `logs/` — 运行时日志（gitignore 管理）
+- `data/raw/` — 38 个知识库原始文档
+- `app/` `config/` `frontend/` `scripts/` `tests/` — 项目源码
+
+**验证**: 407 tests 全通过（删除内容不含测试依赖）。项目根目录无残留无效文件。

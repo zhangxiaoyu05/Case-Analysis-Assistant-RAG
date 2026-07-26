@@ -426,6 +426,11 @@ class Config:
         """关键词重叠度阈值（超过则合并而非新增）。"""
         return _yaml_section("user_memory.merge_threshold", 0.6)
 
+    @property
+    def user_memory_max_tokens_in_prompt(self) -> int:
+        """中期记忆注入 prompt 的最大 token 数（超出截断）。"""
+        return _yaml_section("user_memory.max_tokens_in_prompt", 600)
+
     # ============================================================
     # 长期记忆配置（用户画像）
     # ============================================================
@@ -438,6 +443,11 @@ class Config:
     def user_profile_min_confidence(self) -> float:
         """最低置信度阈值（低于此值不保存）。"""
         return _yaml_section("user_profile.min_confidence", 0.5)
+
+    @property
+    def user_profile_max_tokens_in_prompt(self) -> int:
+        """用户画像注入 prompt 的最大 token 数（超出截断）。"""
+        return _yaml_section("user_profile.max_tokens_in_prompt", 300)
 
     # ============================================================
     # Redis 业务配置

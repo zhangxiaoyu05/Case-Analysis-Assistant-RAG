@@ -40,7 +40,7 @@ models:
     provider: "dashscope"
     model: "qwen3-max"
     temperature: 0.3         # 适当随机性，避免过于机械
-    max_tokens: 2000          # 最大生成 token 数
+    max_tokens: 4096          # 最大生成 token 数（SOAP 报告/鉴别诊断/用药审查需要更长输出）
     top_p: 0.95
     top_k: 50
 
@@ -118,12 +118,12 @@ database:
 # ===== 短期记忆配置 =====
 memory:
   summarize_model: "qwen-flash"  # 摘要模型（快速、便宜）
-  recent_turns: 4                # 保留最近 N 轮完整对话（超出部分压缩为摘要）
+  recent_turns: 6                # 保留最近 N 轮完整对话（临床病例分析需要更长上下文）
   summary_max_tokens: 600        # 摘要最大生成 token 数
   max_summary_chars: 800         # 摘要最大存储字符数
   enabled: true                  # 全局记忆功能开关（false 时所有会话均不启用短期记忆）
   token_threshold_ratio: 0.7     # token 触发阈值比例（超过上下文窗口的此比例时触发摘要）
-  context_window_tokens: 8192    # 模型上下文窗口大小（token 数，用于阈值计算）
+  context_window_tokens: 16384   # 模型上下文窗口大小（qwen3-max 32K，留余量兼容本地蒸馏模型）
 
 # ===== 中期记忆配置（跨会话用户动态记忆）=====
 user_memory:
@@ -133,11 +133,13 @@ user_memory:
   min_importance: 0.1              # 最低重要性阈值（低于此值自动删除）
   recall_top_k: 5                  # 每次请求召回 Top-K 条记忆注入 prompt
   merge_threshold: 0.6             # 关键词重叠度阈值（超过则合并而非新增）
+  max_tokens_in_prompt: 600       # 注入 prompt 的最大 token 数（超出截断）
 
 # ===== 长期记忆配置（用户画像 —— 不可变人口属性）=====
 user_profile:
   extract_model: "qwen-flash"      # 画像提取模型（轻量级即可）
   min_confidence: 0.5              # 最低置信度阈值（低于此值不保存）
+  max_tokens_in_prompt: 300       # 注入 prompt 的最大 token 数（超出截断）
 
 # ===== Redis 配置 =====
 redis:

@@ -176,6 +176,7 @@ class TestSummarizeTriggered:
         manager = MemoryManager(
             threshold_ratio=0.01,
             context_window_tokens=100,
+            recent_turns=1,  # 强制保留 1 轮以触发摘要
         )
         summary, _ = await manager.summarize(
             LONG_HISTORY, "", query="阿司匹林和阿莫西林一起吃可以吗？"

@@ -213,21 +213,60 @@ class UserProfileManager:
             for row in rows
         }
 
-    def format_profile_for_prompt(self, user_id: int) -> str:
+    def format_profile_for_prompt(
+        self, user_id: int, max_tokens: int | None = None
+    ) -> str:
         """
-        获取用户画像并格式化为 prompt 友好的文本。
+        获取用户画像并格式化为 prompt 友好的文本，支持 token 预算截断。
+
+        Args:
+            user_id: 用户 ID
+            max_tokens: token 预算上限（默认从 config 读取），超出则逐字段截断
 
         Returns:
-            格式化的画像文本，如：
-            "医生执业信息（基于对话中明确陈述的内容）：
-            - 科室：心血管内科
-            - 专业领域：心力衰竭（医生自称）"
-            无画像时返回空字符串。
+            格式化的画像文本。无画像时返回空字符串。
         """
+        if max_tokens is None:
+            max_tokens = config.user_profile_max_tokens_in_prompt
+
         profile = self.get_profile(user_id)
         if not profile:
             return ""
-        return self._format_profile_text(profile)
+
+        from app.services.memory_manager import estimate_tokens
+
+        header = "\n医生执业信息（基于对话中明确陈述的内容）：\n"
+        current_tokens = estimate_tokens(header)
+        lines = []
+
+        truncated = False
+        for field_name, info in profile.items():
+            label = _FIELD_LABELS.get(field_name, field_name)
+            value = info["field_value"]
+            confidence = info.get("confidence", 1.0)
+
+            if confidence < 0.7:
+                line = f"- {label}：{value}（医生自称）\n"
+            else:
+                line = f"- {label}：{value}\n"
+
+            line_tokens = estimate_tokens(line)
+
+            if current_tokens + line_tokens > max_tokens:
+                truncated = True
+                break
+
+            lines.append(line)
+            current_tokens += line_tokens
+
+        if not lines:
+            return ""
+
+        result = header + "".join(lines)
+        if truncated:
+            result += "…(画像已截断)\n"
+
+        return result
 
     def get_field(self, user_id: int, field_name: str) -> dict | None:
         """获取单个画像字段。"""
