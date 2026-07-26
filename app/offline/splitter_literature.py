@@ -19,6 +19,7 @@ from app.offline.splitter_disease import (
     Chunk,
     _split_by_chars,
     _merge_short_chunks,
+    _find_universal_headings,
 )
 
 
@@ -166,7 +167,16 @@ def split_literature_document(
     all_chunks: list[Chunk] = []
 
     if not sections:
+        # Fallback: 通用章节检测
+        universal = _find_universal_headings(text)
+        if universal:
+            logger = __import__('loguru').logger
+            logger.info(f"通用章节检测发现 {len(universal)} 个标记")
+            sections = universal
+
+    if not sections:
         # 无 IMRaD 结构：按摘要/正文/参考文献三段切
+        logger = __import__('loguru').logger
         logger.info("未检测到 IMRaD 结构，按三段式切分")
         return _split_by_fallback(text, chunk_size, chunk_overlap)
 

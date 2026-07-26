@@ -307,14 +307,49 @@ class MilvusClient:
             "params": {"nprobe": self._nprobe},
         }
 
-        results = self.client.search(
-            collection_name=self._collection_name,
-            data=[query_vector],
-            filter=filter_expr or "",
-            limit=top_k,
-            output_fields=output_fields,
-            search_params=search_params,
-        )
+        try:
+            results = self.client.search(
+                collection_name=self._collection_name,
+                data=[query_vector],
+                filter=filter_expr or "",
+                limit=top_k,
+                output_fields=output_fields,
+                search_params=search_params,
+            )
+        except Exception as e:
+            if "not exist" in str(e).lower():
+                # v1.0.0: 兼容新旧 Milvus schema
+                # drug_chunks 用 drug_name；disease/guideline/literature 用 source_name
+                logger.warning(
+                    f"Schema 不匹配: {e}，尝试多级字段回退"
+                )
+                results = []
+                for fallback_fields in [
+                    # 新 schema（disease/guideline/literature）
+                    ["doc_id", "chunk_index", "source_name", "source_type",
+                     "section", "chunk_text", "extra_field_1", "extra_field_2"],
+                    # 旧 schema（drug）
+                    ["doc_id", "chunk_index", "drug_name",
+                     "section", "chunk_text"],
+                ]:
+                    try:
+                        results = self.client.search(
+                            collection_name=self._collection_name,
+                            data=[query_vector],
+                            filter=filter_expr or "",
+                            limit=top_k,
+                            output_fields=fallback_fields,
+                            search_params=search_params,
+                        )
+                        break
+                    except Exception:
+                        continue
+                else:
+                    raise RuntimeError(
+                        f"所有字段回退均失败: {self._collection_name}"
+                    )
+            else:
+                raise
 
         # results[0] 是第一个查询向量的结果列表
         if results and len(results) > 0:

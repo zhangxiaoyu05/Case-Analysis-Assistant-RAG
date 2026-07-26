@@ -384,3 +384,32 @@ quality_check:
     参考资料：{context}
     用户问题：{question}
     回答：{answer}
+
+# ===== 文档自动分类（v1.1.0）=====
+document_classifier:
+  system: |
+    你是医学文档分类专家。分析文档内容，判断其属于哪种类型。
+
+    分类标准（四选一）：
+    - drug: 药品说明书，含【药品名称】、【适应症】、【用法用量】、【不良反应】等章节标记
+    - disease: 疾病知识文档，系统讲解某个疾病的病因、流行病学、诊断标准、临床表现、并发症、治疗原则
+    - guideline: 临床指南，含推荐意见（Ⅰ/Ⅱa/Ⅱb/Ⅲ类）、推荐等级、证据级别（A/B/C/GRADE）、发布机构
+    - literature: 学术文献，含IMRaD结构（Abstract/Introduction/Methods/Results/Discussion），注明DOI、期刊、研究类型（RCT/meta-analysis/cohort/observational）
+
+    输出要求：
+    1. 仅输出一行 JSON，不要 markdown 代码块，不要额外解释
+    2. 根据分类结果填充对应的 extra_fields
+
+    JSON 格式：
+    {"source_type": "类型", "inferred_name": "文档名称", "confidence": "high|medium|low", "extra_fields": {}}
+
+    extra_fields 按类型填充：
+    - drug: {{"drug_category": "处方药/OTC", "manufacturer": ""}}
+    - disease: {{"disease_category": "慢性病/急性病/传染病等", "department": "心内科/内分泌科等"}}
+    - guideline: {{"issuing_body": "发布机构名称", "publish_year": 年份, "disease_name": "关联疾病"}}
+    - literature: {{"study_type": "RCT/meta-analysis/cohort/observational/review等", "publish_year": 年份, "evidence_level": "1a/1b/2a/2b/3/4等", "disease_name": "关联疾病", "journal": "期刊名简称"}}
+  user: |
+    文件名：{filename}
+    文档内容（前 2000 字符）：
+    {content}
+

@@ -114,8 +114,16 @@ def _split_by_chars(
     section: str = "",
 ) -> list[Chunk]:
     """
-    将长文本按字符滑动窗口切分。
-    分隔符优先级: \\n\\n → \\n → 。 → ， → 逐字切分
+    句子边界感知的文本切分。
+
+    在 chunk_size 附近寻找最自然的断点，优先级:
+    1. 段落边界 (\\n\\n) — 最强语义边界
+    2. 句子结尾 (。！？) — 自然阅读单元
+    3. 换行 (\\n) — 行级边界
+    4. 子句分隔 (；，) — 弱但可用
+    5. 硬切 — 在 chunk_size 处裁断（最后手段）
+
+    只在 chunk 后半段搜索断点，避免切出过短的 chunk。
     """
     if len(text) <= chunk_size:
         return [Chunk(
@@ -133,12 +141,12 @@ def _split_by_chars(
         end = min(start + chunk_size, len(text))
 
         if end < len(text):
-            # 尝试在分隔符处断开
-            for sep in ["\n\n", "\n", "。", "，"]:
-                last_sep = text.rfind(sep, start, end)
-                if last_sep > start + chunk_size // 2:
-                    end = last_sep + len(sep)
-                    break
+            # 只在后半段找断点: [start + chunk_size//2, end]
+            search_from = start + chunk_size // 2
+            best = _find_best_break(text, search_from, end)
+
+            if best > start:
+                end = best
 
         chunk_text = text[start:end].strip()
         if chunk_text:
@@ -150,17 +158,107 @@ def _split_by_chars(
             ))
             chunk_index += 1
 
-        # 已到文本末尾，退出（修复：之前缺失此判断导致死循环 → OOM → PyCharm 崩溃）
         if end >= len(text):
             break
 
         prev_start = start
         start = end - chunk_overlap
-        # 防止死循环：确保指针前进
+        # 防止死循环：确保指针至少前进 1 个字符
         if start <= prev_start:
             start = prev_start + 1
 
     return chunks
+
+
+def _find_best_break(text: str, search_from: int, search_to: int) -> int:
+    """
+    在 [search_from, search_to] 范围内从后往前找最佳断点。
+
+    Returns:
+        断点位置（新 chunk 从此处开始），找不到则返回 0。
+    """
+    # 优先级 1: 段落边界（双换行）
+    pos = text.rfind("\n\n", search_from, search_to)
+    if pos >= 0:
+        return pos + 2
+
+    # 优先级 2: 句子结尾（中英文句号、问号、感叹号后跟换行或空格）
+    for sep in ("。\n", "。", "！\n", "！", "？\n", "？",
+                ".\n", ".\n", "!\n", "?\n"):
+        pos = text.rfind(sep, search_from, search_to)
+        if pos >= 0:
+            return pos + len(sep)
+
+    # 优先级 3: 换行
+    pos = text.rfind("\n", search_from, search_to)
+    if pos >= 0:
+        return pos + 1
+
+    # 优先级 4: 子句分隔（分号、逗号）
+    for sep in ("；", "，", ";", ","):
+        pos = text.rfind(sep, search_from, search_to)
+        if pos >= 0:
+            return pos + len(sep)
+
+    # 优先级 5: 空格（英文词边界）
+    pos = text.rfind(" ", search_from, search_to)
+    if pos >= 0:
+        return pos + 1
+
+    # 找不到任何自然断点 → 返回 0，由调用方硬切
+    return 0
+
+
+# ============================================================
+# 通用章节检测（fallback）
+# ============================================================
+_UNIVERSAL_HEADING_PATTERNS = [
+    # 编号章节: "1. xxx", "1、xxx", "1) xxx", "1.1. xxx"
+    re.compile(r"^\s*(\d+(?:[\.\)、]\d*)*\s+.+)$", re.MULTILINE),
+    # 中文编号: "一、xxx", "（一）xxx", "(一) xxx"
+    re.compile(r"^\s*[（\(]?[一二三四五六七八九十]+[）\)、]\s*.+$", re.MULTILINE),
+    # 章/节标记: "第X章 xxx", "第X节 xxx"
+    re.compile(r"^\s*(第[一二三四五六七八九十\d]+[章节部分篇]\s*.+)$", re.MULTILINE),
+    # 全大写英文标题（≥4个字符）: "INTRODUCTION", "METHODS AND MATERIALS"
+    re.compile(r"^\s*([A-Z][A-Z\s&]{3,40})$", re.MULTILINE),
+    # 分隔线（常作为段落标记）
+    re.compile(r"^\s*([-=*_]{4,})\s*$", re.MULTILINE),
+]
+
+
+def _find_universal_headings(text: str) -> list[tuple[int, str]]:
+    """
+    通用章节检测 — 当文档类型特定的结构识别失败时回退使用。
+
+    按优先级依次匹配:
+    1. 数字编号 (1. / 1、/ 1) / 1.1.)
+    2. 中文编号 (一、/（一）/(一))
+    3. 章节标记 (第X章 / 第X节)
+    4. 全大写英文标题
+    5. 分隔线 (==== / ----)
+
+    Returns:
+        [(位置, 章节名), ...] 去重且按位置排序
+    """
+    sections: list[tuple[int, str]] = []
+    for pattern in _UNIVERSAL_HEADING_PATTERNS:
+        for m in pattern.finditer(text):
+            name = (m.group(1) or m.group(0)).strip()
+            if len(name) >= 2:
+                sections.append((m.start(), name))
+
+    # 按位置去重（同一位置只保留第一次匹配）
+    sections.sort(key=lambda x: x[0])
+    seen: set[int] = set()
+    unique: list[tuple[int, str]] = []
+    for pos, name in sections:
+        # 允许 ±5 字符的容差（不同模式可能匹配到同一行的不同位置）
+        near = [p for p in seen if abs(p - pos) <= 5]
+        if not near:
+            seen.add(pos)
+            unique.append((pos, name))
+
+    return unique
 
 
 # ============================================================
@@ -203,8 +301,14 @@ def split_disease_document(
     sections = _find_sections(text)
 
     if not sections:
-        # 无章节→全文切分
-        logger.info("未检测到章节标记，全文切分")
+        # Fallback: 通用章节检测
+        sections = _find_universal_headings(text)
+        if sections:
+            logger.info(f"通用章节检测发现 {len(sections)} 个章节标记")
+
+    if not sections:
+        # 完全无结构 → 全文切分
+        logger.info("未检测到任何章节标记，全文切分")
         return _split_by_chars(text, chunk_size, chunk_overlap, section="全文")
 
     # 2. 逐章节切分

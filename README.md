@@ -58,8 +58,9 @@
 |------|------|
 | 文档加载 | 支持 PDF / DOCX / TXT 格式，自动识别 UTF-8 / GBK 编码 |
 | 多源识别 | 自动检测多药品合集并拆分为独立文档 |
+| 文档自动分类 | 🤖 LLM (qwen-flash) 自动识别文档类型（药品/疾病/指南/文献）+ 提取元数据，含规则 fallback |
 | 文本清洗 | 空白规范化、PDF 伪影去除、Unicode 规范化、可选 LLM 脱敏 |
-| 4 种切分器 | 药品（`【章节】`）+ 疾病（Markdown/编号/关键词）+ 指南（推荐等级/证据级别）+ 文献（IMRaD/牛津等级） |
+| 4 种切分器 | 药品（`【章节】`）+ 疾病（Markdown/编号/关键词）+ 指南（推荐等级/证据级别）+ 文献（IMRaD/牛津等级）；均含通用标题检测 fallback + 句子边界感知切分 |
 | 向量化 | DashScope text-embedding-v4，1024 维，支持批量 + 自动重试 |
 | 入库 | MySQL（9 张表 + BM25 全文索引）+ Milvus（4 个 Collection） |
 
@@ -136,24 +137,21 @@ pip install -r requirements.txt
 ### 6. 离线入库（构建知识库）
 
 ```bash
-# 药品说明书入库
+# 🤖 自动识别文档类型（推荐）— 无需手动指定 source-type
 python scripts/run_offline.py --file data/raw/阿莫西林胶囊.txt
+python scripts/run_offline.py --file guideline.pdf
+python scripts/run_offline.py --file disease.txt
 
-# 临床指南入库
+# 手动指定类型（当自动分类不确定时）
 python scripts/run_offline.py --file guideline.pdf --source-type guideline \
     --guideline-title "中国心力衰竭诊疗指南2024"
-
-# 疾病知识入库
 python scripts/run_offline.py --file disease.txt --source-type disease \
     --disease-name "2型糖尿病"
 
-# 学术文献入库
-python scripts/run_offline.py --file paper.pdf --source-type literature
-
-# 目录批量入库
+# 目录批量入库（全部自动识别）
 python scripts/run_offline.py --dir data/raw/
 
-# 干跑预览（不入库）
+# 干跑预览（不入库，显示 AI 分类结果）
 python scripts/run_offline.py --file doc.pdf --dry-run
 ```
 
@@ -178,6 +176,7 @@ docker compose up -d
 | 环节 | 模型 | 说明 |
 |------|------|------|
 | 嵌入 | `text-embedding-v4` | 文本转向量，1024 维 |
+| 文档分类 | `qwen-flash` | 自动识别文档类型（药品/疾病/指南/文献） |
 | 门禁判断 | `qwen-flash` | 轻量模型，二元分类（clinical/not_clinical） |
 | 病例提取 | `qwen-flash` | 结构化提取 10 个临床字段 |
 | 重排序 | `qwen3-rerank` | 检索结果二次排序 |
@@ -213,7 +212,7 @@ docker compose up -d
 | `PUT` | `/api/v1/user/settings` | 更新昵称 |
 | `GET` | `/api/v1/user/profile` | 获取个人画像 |
 | `PUT` | `/api/v1/user/profile` | 批量更新画像字段 |
-| `POST` | `/api/v1/knowledge/upload` | 上传文档构建知识库（支持 drug/disease/guideline/literature） |
+| `POST` | `/api/v1/knowledge/upload` | 上传文档构建知识库（默认 🤖 自动识别类型，支持 drug/disease/guideline/literature） |
 | `GET` | `/api/v1/knowledge/sources` | 列出所有 source_type 的知识条目（含统计） |
 | `GET` | `/api/v1/knowledge/drugs` | 列出已入库药品（向后兼容） |
 | `DELETE` | `/api/v1/knowledge/source/{type}/{id}` | 删除指定来源类型文档（MySQL + Milvus 同步） |
@@ -250,13 +249,14 @@ pytest tests/ --cov=app   # 含覆盖率报告
 │   ├── offline/                # 离线入库（4 种知识源切分器）
 │   │   ├── loader.py           # 文档加载（PDF/DOCX/TXT）
 │   │   ├── cleaner.py          # 文本清洗
-│   │   ├── splitter.py         # 药品说明书切分器
-│   │   ├── splitter_disease.py # 疾病知识切分器
-│   │   ├── splitter_guideline.py # 临床指南切分器（含推荐等级/证据级别检测）
-│   │   ├── splitter_literature.py # 学术文献切分器（IMRaD + 牛津证据等级）
+│   │   ├── classifier.py       # 文档自动分类（LLM + 规则 fallback）
+│   │   ├── splitter.py         # 药品说明书切分器（含通用标题检测 + 句子边界感知）
+│   │   ├── splitter_disease.py # 疾病知识切分器（含通用标题检测 + 句子边界感知）
+│   │   ├── splitter_guideline.py # 临床指南切分器（含推荐等级/证据级别检测 + 通用标题 fallback）
+│   │   ├── splitter_literature.py # 学术文献切分器（IMRaD + 牛津证据等级 + 通用标题 fallback）
 │   │   ├── multi_drug_splitter.py # 多药品合集智能检测与拆分
 │   │   ├── embedder.py         # 向量化
-│   │   └── pipeline.py         # 流程编排（source_type 路由）
+│   │   └── pipeline.py         # 流程编排（自动分类 + source_type 路由）
 │   ├── online/                 # 在线问答
 │   │   ├── intent.py           # 门禁判断（clinical/not_clinical）
 │   │   ├── retriever.py        # 混合检索 + 多源并行检索（4 collection RRF 融合）

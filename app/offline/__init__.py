@@ -29,6 +29,11 @@ from app.offline.multi_drug_splitter import (
     extract_drug_name,
     split_multi_drug,
 )
+from app.offline.classifier import (
+    ClassifyResult,
+    DocumentClassifier,
+    classify_document,
+)
 from app.offline.pipeline import PipelineResult, run_pipeline, run_pipeline_batch
 from app.offline.splitter import Chunk, split_document
 # v1.0.0: 新切分器
@@ -60,6 +65,10 @@ __all__ = [
     "Embedder",
     "EmbeddingResult",
     "embed_texts",
+    # classifier (v1.1.0)
+    "classify_document",
+    "ClassifyResult",
+    "DocumentClassifier",
     # pipeline
     "run_pipeline",
     "run_pipeline_batch",

@@ -49,7 +49,7 @@ from app.offline.splitter_literature import split_literature_document
 def cmd_dry_run(
     file_path: Path,
     desensitize: bool = False,
-    source_type: str = "drug",
+    source_type: str = "auto",
 ) -> None:
     """
     干跑模式：只执行加载 → 清洗 → 切分，不写入数据库。
@@ -65,6 +65,19 @@ def cmd_dry_run(
     logger.info(f"   格式: {doc.file_type}")
     logger.info(f"   推断名称: {doc.inferred_drug_name}")
     logger.info(f"   原文长度: {len(doc.raw_text)} 字符")
+
+    # 1.5 自动分类
+    if source_type == "auto":
+        try:
+            from app.offline.classifier import classify_document
+            result = classify_document(doc.raw_text, filename=file_path.name)
+            source_type = result.source_type
+            logger.info(f"🤖 自动分类: {source_type} (confidence={result.confidence}, "
+                       f"method={result.classification_method})")
+            logger.info(f"   推断名称: {result.inferred_name}")
+        except Exception as e:
+            logger.warning(f"分类失败，回退到 drug: {e}")
+            source_type = "drug"
 
     # 2. 清洗
     cleaned = clean_text(doc.raw_text, desensitize=desensitize)
@@ -250,13 +263,13 @@ def main() -> None:
         action="store_true",
         help="干跑模式：只做加载/清洗/切分，不入库",
     )
-    # v1.0.0: 多源支持参数
+    # v1.0.0: 多源支持参数, v1.1.0: auto 自动分类
     parser.add_argument(
         "--source-type",
         type=str,
-        default="drug",
-        choices=["drug", "disease", "guideline", "literature"],
-        help="文档来源类型（默认 drug）",
+        default="auto",
+        choices=["auto", "drug", "disease", "guideline", "literature"],
+        help="文档来源类型（默认 auto 自动识别）",
     )
     parser.add_argument(
         "--disease-name",

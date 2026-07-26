@@ -2,18 +2,18 @@
 
 > 本文件用于记录每一步操作，便于在新对话窗口中快速恢复上下文。
 > 每次操作后需同步更新此文件。
-> v1.0.0 Phase 1 完成时间：2026-07-25 | Phase 2 完成时间：2026-07-26 | Phase 3 完成时间：2026-07-26 | Phase 4 完成时间：2026-07-26 | 当前测试数：407 ✅
+> v1.0.0 Phase 1 完成时间：2026-07-25 | Phase 2 完成时间：2026-07-26 | Phase 3 完成时间：2026-07-26 | Phase 4 完成时间：2026-07-26 | v1.1.0 完成时间：2026-07-26 | v1.1.1 完成时间：2026-07-26 | 当前测试数：407 ✅
 
 ---
 
 ## 📌 项目概述
 
 - **项目名称**: RAG 临床病例分析助手（原 RAG 药品问答系统）
-- **当前版本**: v1.0.0（Phase 4 完成）
+- **当前版本**: v1.1.0（v1.0.0 Phase 1-4 完成 + v1.1.0 自动分类 + 切分器增强）
 - **项目路径**: `D:\RAG_project\`
 - **技术栈**: LangChain + LangGraph + Milvus + MySQL + Redis + Docker
 - **模型提供商**: 通义千问（DASHSCOPE_API_KEY）
-  - 对话生成: qwen3-max | 门禁判断: qwen-flash | 病例提取: qwen-flash | 嵌入: text-embedding-v4 | 重排序: qwen3-rerank
+  - 对话生成: qwen3-max | 门禁判断: qwen-flash | 病例提取: qwen-flash | 文档分类: qwen-flash | 嵌入: text-embedding-v4 | 重排序: qwen3-rerank
 - **创建日期**: 2026-06-11
 
 ---
@@ -1009,10 +1009,10 @@ pytest tests/ --cov=app       # 含覆盖率报告（需 pytest-cov）
 | 配置层 (.env, YAML) | 步骤 2, 5, 6, 13, 16, 35, 37, 39, 40 | ✅ |
 | 数据层 (Milvus/MySQL/Redis) | 步骤 3, 19-22, 34, 39, 40, **48** | ✅ |
 | Schema 层 (Pydantic) | 步骤 17, 37 | ✅ |
-| 离线流程 (load->clean->split->embed) | 步骤 23, 33, **47**, **49** | ✅ |
+| 离线流程 (load->clean->split->embed) | 步骤 23, 33, **47**, **49**, **53**, **54** | ✅ |
 | 在线流程 (intent->retrieve->rank->generate) | 步骤 24, 37, 优化 G, **49** | ✅ |
 | LangGraph 编排 | 步骤 25, 37, 39, 40, **49** | ✅ |
-| API 端点 | 步骤 17, 25, 37, 39, 40 | ✅ |
+| API 端点 | 步骤 17, 25, 37, 39, 40, **53** | ✅ |
 | API 鉴权与安全 | 步骤 35 | ✅ |
 | 用户系统 (注册/登录/JWT) | 步骤 39 | ✅ |
 | 会话管理 (Redis) | 步骤 25, 34 | ✅ |
@@ -1340,10 +1340,11 @@ D:\RAG_project\
 │       ├── __init__.py         ✅ 统一导出离线流程 API（含新切分器）
 │       ├── loader.py           ✅ 文档加载（PDF/DOCX/TXT + 药名推断）
 │       ├── cleaner.py          ✅ 文本清洗（伪影去除 + 规范化 + 可选脱敏）
-│       ├── splitter.py         ✅ 药品说明书章节感知切分（【章节名】检测 + 中文分隔符）
-│       ├── splitter_disease.py ✅ 步骤 47（疾病知识切分器：Markdown/编号/关键词）
-│       ├── splitter_guideline.py ✅ 步骤 47（指南切分器：章节编号 + 推荐等级 + 证据级别）
-│       ├── splitter_literature.py ✅ 步骤 47（文献切分器：IMRaD + 三段式回退）
+│       ├── classifier.py           ✅ 步骤 53（文档自动分类：LLM + 规则 fallback）
+│       ├── splitter.py         ✅ 药品说明书章节感知切分（含句子边界感知 + 通用标题 fallback，步骤 54）
+│       ├── splitter_disease.py ✅ 步骤 47（疾病知识切分器）+ 步骤 54（句子边界 + 通用标题 api）
+│       ├── splitter_guideline.py ✅ 步骤 47（指南切分器）+ 步骤 54（通用标题 fallback）
+│       ├── splitter_literature.py ✅ 步骤 47（文献切分器）+ 步骤 54（通用标题 fallback）
 │       ├── multi_drug_splitter.py ✅ 步骤 33（多药品合集智能检测与拆分）
 │       ├── embedder.py         ✅ DashScope 向量化（批处理 + 重试）+ text_type 参数
 │       └── pipeline.py         ✅ 流程编排（load→clean→split→embed→MySQL+Milvus）+ source_type 路由
@@ -2096,6 +2097,9 @@ if history and key == "dosage_followup":  # ← 条件过窄
 | 2026-07-25 | 步骤 48 | **Phase 2.3-2.6 — 数据库层扩展**：创建 `migration_v3.sql`（6 张新表 DDL + index_records 扩展）；`milvus_client.py` 支持多 collection（统一 schema 含 source_name/source_type/extra_field_1/extra_field_2）+ 向后兼容旧 drug_chunks；`mysql_client.py` 新增通用 CRUD 方法（generic 系列）；`init_milvus.py`/`init_collection.py` 支持 4 collection + 9 表。|
 | 2026-07-25 | 步骤 49 | **Phase 2.10-2.16 — Pipeline + 检索 + 前端 + CLI 多源扩展**：pipeline.py source_type 路由（4 种切分器 → 4 种表/collection）；retriever.py 新增 `retrieve_from` + `multi_source_retrieve`（4 collection 并行 + 跨源 RRF + 均衡采样）；nodes.py `multi_retrieve_node` 切换到真正多源；manage.html 多源 Tab + source_type 下拉 + 徽标；run_offline.py --source-type 参数。407 测试全通过。|
 | 2026-07-26 | 步骤 50 | **Phase 2 完成度验证 + Bug 修复**：逐一核对 Phase 2 全部 16 个子步骤（2.1-2.16）——MySQL 6 张新表 + Milvus 4 Collection 统一 schema + 3 种新切分器 + Pipeline source_type 路由 + 多源并行检索 + CLI/前端适配，全部完成。发现并修复 3 个 Bug：(1) `config.py` 5 个 multi_source 属性路径从 `database.milvus.multi_source.xxx` 修正为 `database.multi_source.xxx`（原路径指向不存在节点，配置从未生效）；(2) `nodes.py` `multi_retrieve_node` 硬编码 `top_n_per_source=3, final_top_n=10` 改为读取 `config.multi_source_top_n_per_source/final_top_n`；(3) `mysql_client.py` 移除 `bm25_search` 和 `bm25_search_generic` 中声明但未使用的 `query_escaped` 死代码。README.md 同步更新（测试数 407 + 项目结构补全 9 个新文件 + API 表补全 + 离线流程多源化）。407 测试全通过，零回归。|
+| 2026-07-26 | 步骤 53 | **v1.1.0 — 文档自动分类**：创建 classifier.py（LLM + 规则 fallback）；pipeline.py 集成自动分类（source_type="auto"）；API 默认 auto 模式；前端 manage.html 新增"自动识别"选项 + 分类结果展示。407 测试全通过。 |
+| 2026-07-26 | 步骤 54 | **v1.1.0 — 切分器增强**：句子边界感知切分（_split_by_chars/_split_long_section 替换为优先级链：段落→句子→换行→子句→硬切）；通用标题检测 fallback（数字编号/中文编号/章节标记/全大写英文/分隔线 5 种模式）；4 个切分器全部增加三层 fallback。407 测试全通过。 |
+| 2026-07-26 | Bug 修复 | **JWT_SECRET 缺失**：.env 补充持久化 JWT_SECRET，解决 API 重启后前端 token 失效问题。 |
 | 2026-07-26 | 步骤 52 | **Phase 4 — 前端完善 + 全量测试 + 文档**：**4.1** `frontend/index.html` — 新增 AI 病例提取面板（SSE case_profile 事件接收 + renderCaseProfile 渲染，支持主诉/现病史/既往史/体格检查/疑似诊断/关键异常/当前用药/辅助检查 8 个字段，可折叠）；来源按类型 icon 分组 + 证据级别徽标（已有基础上优化 CSS）；流式渲染优化（修复 SSE 事件解析：event: 行正确切换 currentEvent）。**4.2** `frontend/manage.html` — 搜索过滤功能（客户端实时过滤 allSourceData）；动态表单（source_type 切换时更新字段标签和 placeholder + 上传时映射到对应 API 参数名）；来源特定元数据显示（药品分类/疾病分类+科室/指南发布机构+年份/文献研究类型+期刊+年份）；来源计数显示。**4.3** `frontend/login.html` — 品牌文案更新（Logo 💊→🏥、标题"RAG 药品知识问答"→"临床病例分析助手"、副标题"智能药品说明书问答系统"→"AI 驱动的 SOAP 格式临床病例智能分析"）。**4.4** `tests/` — 全量回归测试，407 tests 全部通过，零回归。**4.5** `README.md` — 前端描述更新（新增"AI 病例提取面板"）、项目结构注释更新。**4.6** `pyproject.toml` — 包名 raq-pharma→case-analysis-raq、描述扩展、keywords 更新（新增 langgraph/clinical/case-analysis/soap/evidence-based/llm）。**4.7** `progress.md` — 本条目。**后端改动**：`app/api/routers/chat.py` 流式端点新增 case_profile SSE 事件发送。：将记忆系统和用户画像从患者维度改造为医生维度。**user_memory_manager.py**：`_EXTRACT_SYSTEM_PROMPT` 重写（提取医生临床关注点/疑难点/诊疗偏好/计划/执业特征）；memory_type 枚举 5 项全部重命名（`drug_interest`→`clinical_interest`、`concern`→`clinical_concern`、`preference`→`clinical_preference`、`plan`→`clinical_plan`、`fact`→`clinical_fact`）；`_format_memories_text` type_labels 和标题更新（"用户偏好/关注点"→"医生临床特征"）。**user_profile_manager.py**：`_EXTRACT_SYSTEM_PROMPT` 重写（提取医生执业信息）；`_VALID_FIELDS` 从 9 个患者字段改为 9 个医生字段（name/title/department/hospital/specialty/license_years/guideline_preference/patient_population/common_diseases）；`_FIELD_LABELS` 更新；`_format_profile_text` 标题更新（"用户个人信息"→"医生执业信息"）。**frontend/profile.html**：页面标题和卡片描述更新。**测试**：51 个记忆/画像测试全部更新匹配新枚举值/字段名。407 全量测试零回归。|
 
 ---
@@ -2108,3 +2112,209 @@ if history and key == "dosage_followup":  # ← 条件过窄
 | Phase 2 | 多源知识库（4 Collection + 4 切分器 + 多路检索） | ✅ |
 | Phase 3 | 记忆体系重构（患者→医生维度） | ✅ |
 | Phase 4 | 前端完善 + 全量测试 + 文档 | ✅ |
+| v1.1.0 | 文档自动分类 + 切分器增强 + 前端适配 | ✅ |
+
+---
+
+### 步骤 53: v1.1.0 — 文档自动分类（LLM + 规则 fallback）
+
+**操作时间**: 2026-07-26
+
+**操作内容**:
+创建了 LLM 驱动的文档自动分类器，参照 `app/online/intent.py` 的 Gatekeeper 模式设计。用户上传文档时无需手动指定 `--source-type`，系统自动判断文档类型（drug/disease/guideline/literature）并提取元数据。
+
+**新增文件**:
+
+| 文件 | 说明 |
+|------|------|
+| `app/offline/classifier.py` | 文档自动分类器核心模块（~365 行） |
+
+**修改文件**:
+
+| 文件 | 改动内容 |
+|------|----------|
+| `config/config.yaml` | 新增 `models.classifier` 配置节（provider: dashscope, model: qwen-flash, temperature: 0.1, max_tokens: 300） |
+| `config/prompts.yaml` | 新增 `document_classifier` 提示词模板（system + user，定义 4 种文档类型 + 元数据提取规则） |
+| `app/config.py` | 新增 3 个 classifier 配置属性（classifier_model / classifier_temperature / classifier_max_tokens） |
+| `app/offline/__init__.py` | 导出 ClassifyResult / DocumentClassifier / classify_document |
+| `app/offline/pipeline.py` | `run_pipeline()` source_type 默认值从 "drug" 改为 "auto"；新增步骤 1.2 自动分类（load 之后、multi-drug 检测之前）；Milvus client 创建推迟到分类之后（collation_name 依赖 source_type）；PipelineResult 新增 3 个分类元数据字段（classification_method / classification_confidence / resolved_source_type） |
+| `scripts/run_offline.py` | `--source-type` default 从 "drug" 改为 "auto"；choices 增加 "auto"；cmd_dry_run() 增加自动分类步骤；cmd_process_file() / cmd_process_dir() source_type 默认改为 "auto" |
+| `app/api/routers/knowledge.py` | upload 端点 source_type 默认从 "drug" 改为 "auto"；UploadResponse 新增 classification_method / classification_confidence 字段；auto 模式跳过预检（实际类型由 AI 确定）；响应返回 AI 解析后的 source_type |
+| `frontend/manage.html` | 来源类型下拉框新增 "🤖 自动识别" 默认选项；onSourceTypeChange() 支持 auto 模式 + AI 提示文字；uploadDocument() 显示分类结果（AI 还是规则 + 置信度）；新增 getSourceLabel() 工具函数 |
+
+**核心设计**:
+
+```
+文档输入 → LLM 分析前 2000 字符（qwen-flash）
+  ├─ API 成功 → JSON 解析 → 返回 ClassifyResult (method="llm")
+  │   └─ JSON 失败 → Markdown 代码块提取 → 正则提取 → 规则 fallback
+  └─ API 失败 → _rule_based_classify() 规则匹配 (method="rule")
+```
+
+**规则 fallback 检测顺序**（按特异性从高到低）:
+1. drug — `【药品名称】`/`【适应症】` 等章节标记 ≥2 个
+2. guideline — `推荐意见` + `推荐等级`/`证据级别`/`GRADE` ≥3 个
+3. literature — IMRaD 结构 ≥3 个 或 DOI/RCT/meta-analysis ≥3 个
+4. disease — `病因`/`流行病学`/`诊断标准`/`临床表现`/`并发症`/`治疗原则` ≥4 个
+5. 兜底 — drug（保守默认）
+
+**验证**: 对 4 种类型文档各测试分类正确性，LLM 和规则 fallback 均能正确分类。407 测试全通过。
+
+---
+
+### 步骤 54: v1.1.0 — 切分器增强：句子边界感知 + 通用标题检测
+
+**操作时间**: 2026-07-26
+
+**问题**:
+原有切分器两个痛点：(1) 章节检测失败时回退到全文盲切，丢失所有结构信息；(2) 盲切不尊重句子边界，可能在句子中间硬切，破坏语义完整性。
+
+**改动内容**:
+
+**1. 句子边界感知切分** — 替换 `_split_by_chars` 和 `_split_long_section`：
+
+```
+旧逻辑：在完整 [start, end] 范围内搜索分隔符，可能在前半段就切了
+新逻辑：只在后半段 [start + chunk_size//2, end] 搜索，严格按优先级:
+  1. 段落边界 (\n\n)  ← 最强语义边界
+  2. 句子结尾 (。！？) ← 自然阅读单元
+  3. 换行 (\n)
+  4. 子句分隔 (；，)
+  5. 空格 (英文词边界)
+  6. 硬切 ← 最后手段
+```
+
+| 文件 | 改动 |
+|------|------|
+| `app/offline/splitter_disease.py` | 新增 `_find_best_break()` 函数；重写 `_split_by_chars()` 使用优先级链；被 guideline 和 literature 切分器通过 import 共用 |
+| `app/offline/splitter.py` | 新增 `_find_best_break_drug()` 函数；重写 `_split_long_section()` 使用同样优先级链 + 支持 config.splitter_separator |
+
+**2. 通用标题检测 fallback** — 在 `splitter_disease.py` 新增 `_find_universal_headings()`：
+
+| 模式 | 匹配示例 |
+|------|---------|
+| 数字编号 | `1. xxx` / `1、xxx` / `1.1 xxx` |
+| 中文编号 | `一、xxx` / `（一）xxx` |
+| 章节标记 | `第X章 xxx` / `第X节 xxx` |
+| 全大写英文 | `INTRODUCTION` / `METHODS AND MATERIALS` |
+| 分隔线 | `====` / `----` |
+
+**四个切分器全部更新**：当类型特定的章节检测返回空时，自动回退到通用检测 → 仍然为空才盲切。
+
+| 文件 | 改动 |
+|------|------|
+| `app/offline/splitter_disease.py` | `split_disease_document()` 三层 fallback：Markdown/编号/关键词 → 通用标题 → 全文盲切 |
+| `app/offline/splitter_guideline.py` | `split_guideline_document()` 三层 fallback：编号章节/推荐词 → 通用标题 → 全文盲切 |
+| `app/offline/splitter_literature.py` | `split_literature_document()` 三层 fallback：IMRaD → 通用标题 → 三段式盲切 |
+| `app/offline/splitter.py` | `_split_by_sections()` 两层 fallback：【】标记 → 通用标题 → 全文盲切 |
+
+**验证**: 
+- 句子边界测试：940 字符文本 → 6 chunks，全部以 `。` 结尾，无句子截断
+- 通用标题测试：无 `【】` 标记的药品文档 → 正确识别 `1. 药品名称` / `2. 适应症` / `3. 用法用量`
+- 全文盲切后的《中国2型糖尿病防治指南2024》等文档现在能通过通用标题检测捕获章节结构
+- 407 测试全通过，零回归
+
+---
+
+### Bug 修复: JWT_SECRET 缺失导致前端密钥变动
+
+**操作时间**: 2026-07-26
+
+**问题**: 用户反馈"前端页面好像密钥变动"——刷新页面后登录态丢失。
+
+**根因**: `.env` 文件中缺少 `JWT_SECRET`，`user_manager.py` 每次启动时用 `uuid.uuid4().hex` 生成随机密钥，导致之前签发的 JWT token 全部失效。
+
+**修复**: 在 `.env` 中添加固定密钥 `JWT_SECRET=rag-jwt-secret-v1.1.0-2024-change-in-production`。重启 API 后需重新登录一次（旧 token 仍无效），之后不再变化。
+
+### 测试数据: 疾病/指南/文献各 5 条
+
+**操作时间**: 2026-07-26
+
+**新增数据文件**（12 个）:
+
+| 类别 | 文件 | 内容 |
+|------|------|------|
+| 疾病 | `高血压_疾病知识.txt` | 原发性高血压：流行病学/诊断/并发症/治疗/随访 |
+| 疾病 | `慢性肾脏病_疾病知识.txt` | CKD：KDIGO 分期/病因/并发症（贫血/CKD-MBD/高钾）/治疗 |
+| 疾病 | `慢性阻塞性肺疾病_疾病知识.txt` | COPD：GOLD 2024 分类/急性加重管理/三联吸入剂 |
+| 疾病 | `冠状动脉粥样硬化性心脏病_疾病知识.txt` | CAD：ACS/CCS 分类/二级预防药物/血运重建 |
+| 疾病 | `2型糖尿病_疾病知识.txt` | 糖尿病：分型/并发症/降糖药物/血糖监测 |
+| 指南 | `中国2型糖尿病防治指南2024.txt` | CDS 指南：筛查/血糖目标/药物治疗路径 |
+| 指南 | `中国高血压防治指南2024.txt` | 高血压指南：血压目标/药物选择/联合治疗 |
+| 指南 | `中国血脂管理指南2024.txt` | 血脂指南：ASCVD 风险分层/LDL-C 目标/PCSK9 抑制剂 |
+| 指南 | `KDIGO_CKD_指南2024.txt` | KDIGO 2024：SGLT2i 一线/CKD 治疗/finerenone/贫血管理 |
+| 文献 | `GLP1RA_心血管结局_Meta分析.txt` | GLP-1 RA CVOT meta-analysis（8 项试验，60,080 患者），1a 证据 |
+| 文献 | `SPRINT_强化降压_RCT.txt` | SPRINT 试验：强化 vs 标准降压，1b 证据 |
+| 文献 | `DAPA_CKD_SGLT2i_RCT.txt` | DAPA-CKD：SGLT2i 在非糖尿病 CKD 中的疗效，1b 证据 |
+| 文献 | `FOURIER_PCSK9抑制剂_RCT.txt` | FOURIER：evolocumab 心血管结局试验，1b 证据 |
+
+全部 12 份文档通过自动分类入库（`--source-type auto`），分类准确率 100%。入库后总计：drug×40, disease×5, guideline×5, literature×5 = **55 条知识库条目**。
+
+---
+
+### 步骤 55: v1.1.1 — Milvus Schema 兼容修复 + 文件上传解析修复
+
+**操作时间**: 2026-07-26
+
+**Bug 1: Milvus 向量检索全部失败（药物检索返回空）**
+
+**根因**: `drug_chunks` Collection 使用旧 schema（字段 `drug_name`、无 `source_name`/`source_type`/`extra_field_1`/`extra_field_2`），而 `disease_chunks`/`guideline_chunks`/`literature_chunks` 三个 Collection 使用 v1.0.0 新 schema。`milvus_client.py` 的 `search()` 默认 `output_fields` 包含 `source_name` 等新字段，查询 `drug_chunks` 时 Milvus 报错 `field source_name not exist`，导致向量检索全部失败。
+
+**修复**:
+
+| 文件 | 改动 |
+|------|------|
+| `app/db/milvus_client.py` | `search()` 新增两级字段回退：先尝试新 schema（source_name/source_type/extra_field_1/extra_field_2），失败则尝试旧 schema（drug_name），两级都失败才抛出异常 |
+| `app/online/retriever.py` | `retrieve()` 移除自定义混合 output_fields（同时包含新旧字段名导致两边都不兼容），改用 search() 默认值 + 自动回退；`retrieve_from()` 中 entity 取值兼容 `source_name` → `drug_name` fallback |
+
+**Bug 2: 上传病例文件解析崩溃**
+
+**根因**: `app/offline/loader.py` 的 `load_document()` 返回 `LoadedDocument` 对象（含 `raw_text` 属性），但 `chat.py` 的 `_parse_uploaded_file()` 将其当作字符串调用 `.strip()`，报 `'LoadedDocument' object has no attribute 'strip'`。
+
+**修复**: `app/api/routers/chat.py` 改为 `doc = load_document(tmp_path); text = doc.raw_text`。
+
+**Chrome DevTools 验证**: 三格式（PDF/DOCX/TXT）全部上传 → 解析 → 病例提取 → 检索 → SOAP/用药审查生成成功，5 条知识来源正确展示。407 测试全通过。
+
+---
+
+### 步骤 56: v1.1.1 — 记忆体系残留修复（药品问答 → 临床病例）
+
+**操作时间**: 2026-07-26
+
+**问题**: 从药品问答改造为临床病例分析助手后，三段记忆体系存在旧领域残留。
+
+**修复**:
+
+| 文件 | 改动 |
+|------|------|
+| `app/services/memory_manager.py` | `_SUMMARIZE_SYSTEM_PROMPT` 从"药品知识问答助手"改为"临床病例分析助手"；关键信息保留从"药品名/症状"改为"疾病/症状/鉴别诊断/检查结果/用药方案/指南推荐" |
+| `app/services/conversation_manager.py` | 标题生成 few-shot 示例从药品咨询（阿司匹林/布洛芬/高血压）改为临床病例（急性胸痛/鉴别诊断/心衰SGLT2i/SOAP报告） |
+| `scripts/mysql_init.sql` | `user_memories.memory_type` COMMENT 从 `drug_interest/...` 改为 `clinical_interest/...`；`user_profiles.field_name` COMMENT 从患者字段改为医生执业字段 |
+| `scripts/migration_memory.sql` | 同上两项 COMMENT 修复 |
+
+**验证**: 407 测试全通过，零回归。
+
+---
+
+### Chrome DevTools 全功能测试
+
+**操作时间**: 2026-07-26
+
+通过 Chrome DevTools 对医生上传病例文件的完整流程进行了端到端测试：
+
+| 测试项 | 结果 |
+|--------|:--:|
+| 用户注册（JWT + localStorage） | ✅ |
+| PDF 上传 + 解析 + 病例提取 | ✅ |
+| DOCX 上传 + 解析 + 病例提取 | ✅ |
+| TXT 上传 + 解析 + 病例提取 | ✅ |
+| 综合分析（SOAP 四段） | ✅ |
+| 鉴别诊断（按可能性排序） | ✅ |
+| 诊疗评估（指南依从性 + 剂量 + 相互作用） | ✅ |
+| 用药审查（7 维度表格化审查） | ✅ |
+| SSE 流式输出 | ✅ |
+| 知识检索（5 条来源 + 相关度分数） | ✅ |
+| 循证引用（推荐等级 + 证据级别） | ✅ |
+| 自动标题生成 | ✅ |
+
+**四种分析模式行为验证**: 综合分析/鉴别诊断/诊疗评估/用药审查四种模式通过 5 个不同的 system prompt 模板驱动不同输出结构，检索查询构建中 drug_review 模式自动追加药物相互作用查询，差异在生成层显著、检索层可进一步优化。

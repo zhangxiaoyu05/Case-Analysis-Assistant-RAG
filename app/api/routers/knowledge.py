@@ -50,6 +50,9 @@ class UploadResponse(BaseModel):
     status: str = Field(default="completed", description="批次状态")
     message: str = Field(default="", description="处理消息")
     source_type: str = Field(default="drug", description="来源类型")
+    # v1.1.0: 自动分类元数据
+    classification_method: Optional[str] = Field(default=None, description="分类方式: llm / rule")
+    classification_confidence: Optional[str] = Field(default=None, description="分类置信度: high / medium / low")
 
 
 class BatchStatus(BaseModel):
@@ -169,7 +172,7 @@ def _build_extra_fields(source_type: str, **form_fields) -> dict:
 async def upload_document(
     file: UploadFile = File(..., description="文档文件"),
     drug_name: Optional[str] = Form(None, description="来源名称（不填则从文件名推断）"),
-    source_type: str = Form("drug", description="来源类型：drug/disease/guideline/literature"),
+    source_type: str = Form("auto", description="来源类型：auto/drug/disease/guideline/literature（auto 为 AI 自动识别）"),
     desensitize: bool = Form(False, description="是否启用 LLM 脱敏"),
     overwrite: bool = Form(False, description="当文档已存在时是否覆盖旧数据"),
     # v1.0.0: source-type-specific fields
@@ -208,14 +211,16 @@ async def upload_document(
         raise HTTPException(status_code=500, detail=f"文件保存失败: {e}")
 
     # 3. 提前检查是否已存在（快速失败）
-    check_name = drug_name or guideline_title or disease_name
-    if not overwrite and check_name:
-        if _check_source_exists(source_type, check_name):
-            label = _SOURCE_LABELS.get(source_type, "文档")
-            raise HTTPException(
-                status_code=409,
-                detail=f"{label} '{check_name}' 已存在于知识库中。如需覆盖，请设置 overwrite=true",
-            )
+    # 注意：auto 模式下跳过预检，因为实际 source_type 由 AI 确定
+    if source_type != "auto":
+        check_name = drug_name or guideline_title or disease_name
+        if not overwrite and check_name:
+            if _check_source_exists(source_type, check_name):
+                label = _SOURCE_LABELS.get(source_type, "文档")
+                raise HTTPException(
+                    status_code=409,
+                    detail=f"{label} '{check_name}' 已存在于知识库中。如需覆盖，请设置 overwrite=true",
+                )
 
     # 4. 记录文件名（供状态查询使用）
     _batch_filenames[batch_id] = filename
@@ -254,6 +259,8 @@ async def upload_document(
         )
 
         inferred_name = result.drug_name or resolved_name or "未知"
+        # v1.1.0: 使用 pipeline 解析后的 source_type（auto 时由 AI 确定）
+        resolved_type = result.resolved_source_type or source_type
 
         if result.status == "skipped":
             logger.info(f"[{batch_id}] {source_type} 已存在，跳过: {inferred_name}")
@@ -264,12 +271,14 @@ async def upload_document(
                 total_chunks=0,
                 indexed_chunks=0,
                 status="skipped",
-                message=result.error_message or f"{_SOURCE_LABELS.get(source_type, '文档')}已存在，未覆盖",
-                source_type=source_type,
+                message=result.error_message or f"{_SOURCE_LABELS.get(resolved_type, '文档')}已存在，未覆盖",
+                source_type=resolved_type,
+                classification_method=result.classification_method,
+                classification_confidence=result.classification_confidence,
             )
 
         logger.info(
-            f"[{batch_id}] 入库完成: source={inferred_name}, type={source_type}, "
+            f"[{batch_id}] 入库完成: source={inferred_name}, type={resolved_type}, "
             f"chunks={result.total_chunks}, indexed={result.indexed_chunks}"
         )
 
@@ -283,7 +292,9 @@ async def upload_document(
             message="知识库构建完成" if result.status == "completed" else (
                 result.error_message or "部分完成"
             ),
-            source_type=source_type,
+            source_type=resolved_type,
+            classification_method=result.classification_method,
+            classification_confidence=result.classification_confidence,
         )
 
     except Exception as e:

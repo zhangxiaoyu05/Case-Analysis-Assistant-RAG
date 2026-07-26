@@ -101,9 +101,11 @@ def _parse_uploaded_file(file: UploadFile) -> tuple[str, str]:
 
         try:
             from app.offline.loader import load_document
-            text = load_document(tmp_path)
+            doc = load_document(tmp_path)
         finally:
             Path(tmp_path).unlink(missing_ok=True)
+
+        text = doc.raw_text if hasattr(doc, 'raw_text') else str(doc)
 
         if not text or not text.strip():
             return "", "文件内容为空或无法识别文本内容"

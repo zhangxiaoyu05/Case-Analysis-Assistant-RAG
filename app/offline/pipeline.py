@@ -63,6 +63,10 @@ class PipelineResult:
     warnings: list[str] = field(default_factory=list)
     # 多药品合集拆分结果（仅合集文档有值）
     sub_results: list["PipelineResult"] = field(default_factory=list)
+    # v1.1.0: 自动分类元数据
+    classification_method: Optional[str] = None  # "llm" | "rule" | None（手动指定时）
+    classification_confidence: Optional[str] = None  # "high" | "medium" | "low"
+    resolved_source_type: str = "drug"  # 最终确定的 source_type（auto 分类后）
 
 
 # ============================================================
@@ -379,6 +383,7 @@ def _process_single_drug(
             error_message=error_msg,
             elapsed_seconds=elapsed,
             warnings=warnings,
+            resolved_source_type=source_type,
         )
 
     except Exception as e:
@@ -475,6 +480,12 @@ def _aggregate_results(
     logger.info(f"   状态: {status}")
     logger.info("=" * 60)
 
+    # 提取第一个子结果的分类元数据（v1.1.0）
+    first = results[0]
+    cls_method = first.classification_method
+    cls_conf = first.classification_confidence
+    resolved_st = first.resolved_source_type
+
     return PipelineResult(
         batch_id=batch_id,
         doc_id=-1,  # 合集没有单一 doc_id
@@ -488,6 +499,9 @@ def _aggregate_results(
         elapsed_seconds=elapsed,
         warnings=warnings,
         sub_results=results,
+        classification_method=cls_method,
+        classification_confidence=cls_conf,
+        resolved_source_type=resolved_st,
     )
 
 
@@ -505,8 +519,8 @@ def run_pipeline(
     mysql_client: Optional[MySQLClient] = None,
     milvus_client: Optional[MilvusClient] = None,
     embedder: Optional[Embedder] = None,
-    # v1.0.0: 多源支持
-    source_type: str = "drug",
+    # v1.0.0: 多源支持, v1.1.0: auto 自动分类
+    source_type: str = "auto",
     disease_name: Optional[str] = None,
     guideline_title: Optional[str] = None,
     **extra_fields,
@@ -554,7 +568,7 @@ def run_pipeline(
     batch_id = batch_id or uuid.uuid4().hex[:12]
     file_path = Path(file_path)
 
-    # 资源管理
+    # 资源管理（MySQL & embedder 先创建，Milvus 依赖 source_type 延迟创建）
     _own_mysql = mysql_client is None
     _own_milvus = milvus_client is None
     _own_embedder = embedder is None
@@ -562,12 +576,9 @@ def run_pipeline(
     if mysql_client is None:
         mysql_client = MySQLClient()
         mysql_client.connect()
-    if milvus_client is None:
-        collection_name = f"{source_type}_chunks"
-        milvus_client = MilvusClient(collection_name=collection_name)
-        milvus_client.connect()
     if embedder is None:
         embedder = Embedder()
+    # Milvus client 延后创建 — collection_name 依赖 source_type
 
     try:
         # ============================================================
@@ -609,9 +620,58 @@ def run_pipeline(
             )
 
         # ============================================================
-        # 步骤 1.5: 多药品文档检测与拆分 (NEW)
+        # 步骤 1.2: 自动分类（v1.1.0 — 当 source_type == "auto" 时）
         # ============================================================
-        if detect_multi_drug(doc.raw_text):
+        auto_classify_result = None
+        if source_type == "auto":
+            try:
+                from app.offline.classifier import classify_document
+
+                auto_classify_result = classify_document(
+                    doc.raw_text, filename=file_path.name
+                )
+                source_type = auto_classify_result.source_type
+                logger.info(
+                    f"   auto_classify: {source_type} "
+                    f"(confidence={auto_classify_result.confidence}, "
+                    f"method={auto_classify_result.classification_method})"
+                )
+                logger.info(f"   inferred_name: {auto_classify_result.inferred_name}")
+
+                # 合并分类元数据到 extra_fields（用户显式传入的优先）
+                cls_extra = auto_classify_result.extra_fields
+                for key, val in cls_extra.items():
+                    if key not in extra_fields:
+                        extra_fields[key] = val
+
+                # 推断名称：分类结果作为 fallback
+                if not drug_name and not disease_name and not guideline_title:
+                    inferred = auto_classify_result.inferred_name
+                    if source_type == "drug":
+                        drug_name = inferred
+                    elif source_type == "disease":
+                        disease_name = inferred
+                        extra_fields.setdefault("disease_name", inferred)
+                    elif source_type == "guideline":
+                        guideline_title = inferred
+                        extra_fields.setdefault("guideline_title", inferred)
+                    elif source_type == "literature":
+                        extra_fields.setdefault("title", inferred)
+
+            except Exception as e:
+                logger.warning(f"auto_classify failed, fallback to drug: {e}")
+                source_type = "drug"
+
+        # 创建 Milvus client（依赖已确定的 source_type）
+        if milvus_client is None:
+            collection_name = f"{source_type}_chunks"
+            milvus_client = MilvusClient(collection_name=collection_name)
+            milvus_client.connect()
+
+        # ============================================================
+        # 步骤 1.5: 多药品文档检测与拆分（仅 drug 类型）
+        # ============================================================
+        if source_type == "drug" and detect_multi_drug(doc.raw_text):
             logger.info("🔍 检测到多药品合集文档，启动智能拆分...")
             sub_docs: list[SubDocument] = split_multi_drug(doc.raw_text)
             logger.info(f"拆分完成: {len(sub_docs)} 种药品将独立入库")
@@ -657,6 +717,11 @@ def run_pipeline(
                         milvus_client=milvus_client,
                         embedder=embedder,
                     )
+                    # v1.1.0: 附上自动分类元数据
+                    if auto_classify_result is not None:
+                        sub_result.classification_method = auto_classify_result.classification_method
+                        sub_result.classification_confidence = auto_classify_result.confidence
+                        sub_result.resolved_source_type = source_type
                 except Exception as e:
                     logger.error(f"子文档处理异常 [{resolved_sub_name}]: {e}")
                     sub_result = PipelineResult(
@@ -720,6 +785,12 @@ def run_pipeline(
             **extra_fields,
         )
 
+        # v1.1.0: 附上自动分类元数据
+        if auto_classify_result is not None:
+            result.classification_method = auto_classify_result.classification_method
+            result.classification_confidence = auto_classify_result.confidence
+            result.resolved_source_type = source_type  # AI 解析后的类型
+
         elapsed = time.time() - t_start
         logger.info("=" * 60)
         logger.info(
@@ -759,7 +830,7 @@ def run_pipeline(
         # 清理自己创建的资源
         if _own_mysql:
             mysql_client.disconnect()
-        if _own_milvus:
+        if _own_milvus and milvus_client is not None:
             milvus_client.disconnect()
 
 

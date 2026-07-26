@@ -136,7 +136,7 @@ CREATE TABLE IF NOT EXISTS conversations (
 CREATE TABLE IF NOT EXISTS user_memories (
     id BIGINT AUTO_INCREMENT PRIMARY KEY,
     user_id BIGINT NOT NULL,
-    memory_type VARCHAR(32) NOT NULL COMMENT 'drug_interest/concern/preference/plan/fact',
+    memory_type VARCHAR(32) NOT NULL COMMENT 'clinical_interest/concern/preference/plan/fact',
     content VARCHAR(500) NOT NULL,
     keywords VARCHAR(300),
     importance_score FLOAT DEFAULT 1.0,
@@ -156,7 +156,7 @@ CREATE TABLE IF NOT EXISTS user_memories (
 CREATE TABLE IF NOT EXISTS user_profiles (
     id BIGINT AUTO_INCREMENT PRIMARY KEY,
     user_id BIGINT NOT NULL,
-    field_name VARCHAR(64) NOT NULL COMMENT 'name/age/gender/birthday/medical_history/allergies/current_medications/pregnancy_status/occupation',
+    field_name VARCHAR(64) NOT NULL COMMENT 'name/title/department/hospital/specialty/license_years/guideline_preference/patient_population/common_diseases',
     field_value VARCHAR(500) NOT NULL,
     confidence FLOAT DEFAULT 1.0 COMMENT '提取置信度（0.0~1.0）',
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,

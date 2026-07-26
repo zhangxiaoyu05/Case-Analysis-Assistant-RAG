@@ -215,6 +215,21 @@ class Config:
         return _yaml_section("models.case_extraction.max_tokens", 800)
 
     # ============================================================
+    # 模型配置 —— 文档分类
+    # ============================================================
+    @property
+    def classifier_model(self) -> str:
+        return _yaml_section("models.classifier.model", "qwen-flash")
+
+    @property
+    def classifier_temperature(self) -> float:
+        return _yaml_section("models.classifier.temperature", 0.1)
+
+    @property
+    def classifier_max_tokens(self) -> int:
+        return _yaml_section("models.classifier.max_tokens", 300)
+
+    # ============================================================
     # 模型配置 —— 问答生成
     # ============================================================
     @property

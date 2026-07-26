@@ -281,6 +281,7 @@ input[type="file"] { display: none; }
       <div class="form-group" style="flex:2;margin-bottom:0">
         <label>来源类型</label>
         <select id="sourceTypeSelect" style="width:100%;padding:9px 12px;border:1px solid var(--border);border-radius:8px;font-size:13px;font-family:inherit;outline:none;background:#fff" onchange="onSourceTypeChange()">
+          <option value="auto">🤖 自动识别</option>
           <option value="drug">💊 药品说明书</option>
           <option value="disease">🦠 疾病知识</option>
           <option value="guideline">📋 临床指南</option>
@@ -423,15 +424,30 @@ function onSourceTypeChange() {
   const input = document.getElementById('extraFieldInput');
 
   const config = {
+    auto:        { label: '文档名称（选填）', placeholder: '留空则由 AI 自动识别类型和名称...' },
     drug:       { label: '药品名称（选填）', placeholder: '留空则从文件名自动推断...' },
     disease:    { label: '疾病名称（选填）', placeholder: '例如：2型糖尿病、心力衰竭...' },
     guideline:  { label: '指南标题（选填）', placeholder: '例如：中国心力衰竭诊疗指南2024...' },
     literature: { label: '文献标题（选填）', placeholder: '例如：Efficacy of SGLT2i in HFrEF...' },
   };
 
-  const cfg = config[sourceType] || config.drug;
+  const cfg = config[sourceType] || config.auto;
   label.textContent = cfg.label;
   input.placeholder = cfg.placeholder;
+
+  // Hint text below the select
+  let hintEl = document.getElementById('sourceTypeHint');
+  if (!hintEl) {
+    hintEl = document.createElement('div');
+    hintEl.id = 'sourceTypeHint';
+    hintEl.style.cssText = 'font-size:11px;color:var(--text-muted);margin-top:4px;';
+    document.getElementById('sourceTypeSelect').parentElement.appendChild(hintEl);
+  }
+  if (sourceType === 'auto') {
+    hintEl.textContent = '🤖 AI 将自动分析文档内容，判断类型并提取元数据';
+  } else {
+    hintEl.textContent = '';
+  }
 }
 
 // ============================================================
@@ -474,15 +490,19 @@ async function uploadDocument() {
   const status = document.getElementById('uploadStatus');
   btn.disabled = true;
   btn.textContent = '⏳ 入库中...';
-  status.innerHTML = '<span style="color:#f59e0b">正在处理文档，请稍候...</span>';
+  const sourceType = document.getElementById('sourceTypeSelect').value;
+  if (sourceType === 'auto') {
+    status.innerHTML = '<span style="color:#f59e0b">🤖 AI 正在分析文档类型...</span>';
+  } else {
+    status.innerHTML = '<span style="color:#f59e0b">正在处理文档，请稍候...</span>';
+  }
 
   const form = new FormData();
   form.append('file', file);
   const extraName = document.getElementById('extraFieldInput').value.trim();
-  const sourceType = document.getElementById('sourceTypeSelect').value;
   if (extraName) {
     // Map source_type to the appropriate field name
-    const fieldMap = { drug: 'drug_name', disease: 'disease_name', guideline: 'guideline_title', literature: 'title' };
+    const fieldMap = { auto: 'drug_name', drug: 'drug_name', disease: 'disease_name', guideline: 'guideline_title', literature: 'title' };
     const fieldName = fieldMap[sourceType] || 'drug_name';
     form.append(fieldName, extraName);
   }
@@ -493,8 +513,19 @@ async function uploadDocument() {
     const r = await fetch(`${API}/knowledge/upload`, { method: 'POST', body: form });
     const d = await r.json();
     if (!r.ok) throw new Error(d.detail || '上传失败');
-    status.innerHTML = `<span style="color:#10b981">✅ 入库成功！${d.drug_name}: ${d.indexed_chunks}/${d.total_chunks} chunks 已索引</span>`;
-    showToast(`已入库 [${sourceType}]: ${d.drug_name} (${d.indexed_chunks} chunks)`, 'success');
+
+    // Build success message with classification info
+    const srcLabel = getSourceLabel(d.source_type || sourceType);
+    let msg = `✅ 入库成功！`;
+    if (sourceType === 'auto') {
+      const methodLabel = d.classification_method === 'rule' ? '规则' : 'AI';
+      msg += ` 🤖→${srcLabel}: ${d.drug_name} (${d.indexed_chunks}/${d.total_chunks} chunks)`;
+      status.innerHTML = `<span style="color:#10b981">${msg}<br><span style="font-size:11px;color:var(--text-muted)">分类方式: ${methodLabel} | 置信度: ${d.classification_confidence || '-'}</span></span>`;
+    } else {
+      msg += ` ${srcLabel}: ${d.drug_name} (${d.indexed_chunks}/${d.total_chunks} chunks)`;
+      status.innerHTML = `<span style="color:#10b981">${msg}</span>`;
+    }
+    showToast(`已入库 [${srcLabel}]: ${d.drug_name} (${d.indexed_chunks} chunks)`, 'success');
     refreshSources();
     checkHealth();
     fileInput.value = '';
@@ -507,6 +538,11 @@ async function uploadDocument() {
     btn.disabled = false;
     btn.textContent = '⚡ 上传并入库';
   }
+}
+
+function getSourceLabel(st) {
+  const labels = { auto: '自动识别', drug: '药品', disease: '疾病', guideline: '指南', literature: '文献' };
+  return labels[st] || st;
 }
 
 // ============================================================

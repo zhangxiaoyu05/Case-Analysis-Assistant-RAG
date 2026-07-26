@@ -21,6 +21,7 @@ from typing import Optional
 from loguru import logger
 
 from app.config import config
+from app.offline.splitter_disease import _find_universal_headings
 
 
 # ============================================================
@@ -77,8 +78,16 @@ def _split_by_sections(text: str) -> list[dict]:
     markers = _find_sections(text)
 
     if not markers:
-        # 没有章节标记，整篇作为一个章节
-        logger.debug("未检测到【】章节标记，整篇作为单一段落处理")
+        # Fallback: 通用章节检测
+        universal = _find_universal_headings(text)
+        if universal:
+            logger.info(f"药品文档未检测到【】标记，通用章节检测发现 {len(universal)} 个标记")
+            # 构建与 _find_sections 兼容的格式
+            markers = [(pos, name) for pos, name in universal]
+
+    if not markers:
+        # 完全无章节标记，整篇作为一个章节
+        logger.debug("未检测到任何章节标记，整篇作为单一段落处理")
         return [{"section": "__preamble__", "content": text.strip()}]
 
     sections: list[dict] = []
@@ -169,6 +178,53 @@ def _merge_short_sections(
 _SPLIT_SEPARATORS = ["\n\n", "\n", "。", "！", "？", "；", "，"]
 
 
+def _find_best_break_drug(text: str, search_from: int, search_to: int) -> int:
+    """
+    在 [search_from, search_to] 范围内从后往前找最佳断点（药品说明书版本）。
+
+    优先级与 _split_by_chars 一致，但额外支持 config 配置的分隔符。
+
+    Returns:
+        断点位置（新 chunk 从此处开始），找不到则返回 0。
+    """
+    # 优先使用配置的分隔符
+    configured_sep = config.splitter_separator
+    if configured_sep:
+        pos = text.rfind(configured_sep, search_from, search_to)
+        if pos >= 0:
+            return pos + len(configured_sep)
+
+    # 优先级 1: 段落边界
+    pos = text.rfind("\n\n", search_from, search_to)
+    if pos >= 0:
+        return pos + 2
+
+    # 优先级 2: 句子结尾
+    for sep in ("。\n", "。", "！\n", "！", "？\n", "？",
+                ".\n", "!\n", "?\n"):
+        pos = text.rfind(sep, search_from, search_to)
+        if pos >= 0:
+            return pos + len(sep)
+
+    # 优先级 3: 换行
+    pos = text.rfind("\n", search_from, search_to)
+    if pos >= 0:
+        return pos + 1
+
+    # 优先级 4: 子句分隔
+    for sep in ("；", "，", ";", ","):
+        pos = text.rfind(sep, search_from, search_to)
+        if pos >= 0:
+            return pos + len(sep)
+
+    # 优先级 5: 空格
+    pos = text.rfind(" ", search_from, search_to)
+    if pos >= 0:
+        return pos + 1
+
+    return 0
+
+
 def _split_long_section(
     section_name: str,
     content: str,
@@ -177,13 +233,12 @@ def _split_long_section(
     min_chunk_size: int,
 ) -> list[Chunk]:
     """
-    将过长的章节内容按中文分隔符切分成多个 chunk。
+    将过长的章节内容按句子边界切分成多个 chunk。
 
     策略：
-    1. 先尝试按最粗的分隔符切分
-    2. 对于仍然过长的段，递归使用更细的分隔符
-    3. 使用滑动窗口控制重叠
-    4. 尾块如果太短则合并到前一块
+    1. 在 chunk 后半段寻找最自然的断点（段落 > 句子 > 换行 > 子句 > 硬切）
+    2. 滑动窗口控制 chunk 间重叠
+    3. 尾块如果太短则合并到前一块
 
     Args:
         section_name: 章节名
@@ -207,7 +262,6 @@ def _split_long_section(
     start = 0
 
     while start < len(content):
-        # 确定当前 chunk 的结束位置
         end = min(start + chunk_size, len(content))
 
         if end >= len(content):
@@ -222,27 +276,13 @@ def _split_long_section(
                 ))
             break
 
-        # 在 chunk_size 范围内寻找最佳切分点
-        # 从后往前在 content[start:end] 范围内找分隔符
-        chunk_candidate = content[start:end]
-        best_split = -1
+        # 只在后半段找断点: [start + chunk_size//2, end]
+        search_from = start + chunk_size // 2
+        best = _find_best_break_drug(content, search_from, end)
 
-        for sep in [config.splitter_separator] + _SPLIT_SEPARATORS:
-            # 在候选区域内找最后一个分隔符位置
-            pos = chunk_candidate.rfind(sep)
-            if pos > min_chunk_size:
-                # 找到了足够靠后的分隔符
-                best_split = start + pos + len(sep)
-                break
-            elif pos > 0:
-                # 找到了分隔符但位置靠前，记录下来但继续找更好的
-                if best_split < 0 or pos > (best_split - start):
-                    best_split = start + pos + len(sep)
-
-        if best_split > start:
-            # 有自然分隔点
-            chunk_text = content[start:best_split].strip()
-            start = best_split
+        if best > start:
+            chunk_text = content[start:best].strip()
+            start = best
         else:
             # 没有自然分隔点，硬切
             chunk_text = content[start:end].strip()
@@ -267,7 +307,6 @@ def _split_long_section(
     if len(chunks) >= 2 and chunks[-1].char_count < min_chunk_size:
         last = chunks.pop()
         prev = chunks[-1]
-        # 合并在一起（不保留重叠以避免重复）
         merged_text = prev.chunk_text + last.chunk_text
         chunks[-1] = Chunk(
             section=section_name,

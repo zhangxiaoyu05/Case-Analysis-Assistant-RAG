@@ -44,6 +44,13 @@ models:
     top_p: 0.95
     top_k: 50
 
+  # 文档分类模型（自动识别 source_type）
+  classifier:
+    provider: "dashscope"
+    model: "qwen-flash"      # 轻量模型做文档分类，快速便宜
+    temperature: 0.1          # 低温度确保确定性输出
+    max_tokens: 300           # JSON 输出短小
+
   # 重排序模型（对检索结果二次排序）
   rerank:
     provider: "dashscope"

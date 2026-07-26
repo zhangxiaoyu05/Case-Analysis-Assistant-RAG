@@ -20,6 +20,7 @@ from app.offline.splitter_disease import (
     Chunk,
     _split_by_chars,
     _merge_short_chunks,
+    _find_universal_headings,
 )
 
 
@@ -141,7 +142,16 @@ def split_guideline_document(
     all_chunks: list[Chunk] = []
 
     if not sections:
-        # 无章节结构，全文切分
+        # Fallback: 通用章节检测
+        universal = _find_universal_headings(text)
+        if universal:
+            logger = __import__('loguru').logger
+            logger.info(f"通用章节检测发现 {len(universal)} 个标记")
+            sections = [(pos, name, {}) for pos, name in universal]
+
+    if not sections:
+        # 完全无结构 → 全文切分
+        logger = __import__('loguru').logger
         logger.info("未检测到指南章节标记，全文切分")
         return _split_by_chars(text, chunk_size, chunk_overlap, section="全文")
 

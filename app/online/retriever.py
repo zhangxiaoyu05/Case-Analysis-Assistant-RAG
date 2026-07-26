@@ -162,16 +162,10 @@ class Retriever:
         if query_vector is not None:
             try:
                 # v1.0.0: 兼容新旧 Milvus schema（旧 drug_chunks 用 drug_name，新 collection 用 source_name）
-                output_fields = [
-                    "doc_id", "source_name", "source_type", "section",
-                    "chunk_text", "chunk_index", "extra_field_1", "extra_field_2",
-                    "drug_name",  # 旧 schema 兼容
-                ]
                 milvus_results = self.milvus.search(
                     query_vector=query_vector,
                     top_k=self._vector_top_k,
-                    filter_expr=None,  # v1.0.0: 不做标量过滤（新旧 schema 字段名不同），由 RRF 融合后处理
-                    output_fields=output_fields,
+                    filter_expr=None,  # v1.0.0: 不做标量过滤，由 search() 内字段回退处理
                 )
                 for r in milvus_results:
                     entity = r.get("entity", {})
