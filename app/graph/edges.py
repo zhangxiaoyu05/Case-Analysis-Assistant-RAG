@@ -2,6 +2,11 @@
 LangGraph 条件路由函数
 
 每个路由函数接收 RagState，返回目标节点名称字符串。
+
+v1.0.0: 从药品三元路由改为临床病例路由。
+  clinical → case_preprocess（进入病例预处理 + RAG 全流程）
+  chitchat → chitchat（问候白名单）
+  not_clinical → reject（统一拦截）
 """
 
 from app.graph.state import RagState
@@ -9,26 +14,32 @@ from app.graph.state import RagState
 
 def route_after_intent(state: RagState) -> str:
     """
-    意图分类后的路由。
+    门禁后的路由。
 
-    - drug_inquiry → 走正常检索流程
-    - chitchat → 闲聊回应（不走检索）
-    - general → 通用问答（不走检索，LLM 直接回答）
-    - attack → 拒绝回答（安全提示）
-    - 意图节点出错 → 降级到检索流程（出兜底回答）
+    - clinical → 病例预处理（RAG 全流程第一步）
+    - chitchat → 闲聊回应（问候白名单命中，不走检索）
+    - not_clinical → 统一拦截（非临床问题，不调 LLM）
+    - 门禁出错 → 降级放行到病例预处理
     """
     if state.get("error_node") == "intent":
-        # 意图识别失败但默认视为药品问题，继续走正常流程
-        return "retrieve"
+        return "case_preprocess"
 
     intent = state.get("intent", "")
     if intent == "chitchat":
         return "chitchat"
-    if intent == "general":
-        return "general"
-    if intent == "attack":
-        return "attack"
-    return "retrieve"
+    if intent == "not_clinical":
+        return "reject"
+    return "case_preprocess"
+
+
+def route_after_case_preprocess(state: RagState) -> str:
+    """
+    病例预处理后的路由。
+
+    - 有 error_node 且为 case_preprocess → 仍然进入检索（降级）
+    - 否则 → 进入多路检索
+    """
+    return "multi_retrieve"
 
 
 def route_after_retrieve(state: RagState) -> str:

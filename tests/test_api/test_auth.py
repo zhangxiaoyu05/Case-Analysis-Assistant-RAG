@@ -40,9 +40,9 @@ def base_client():
     mock_compiled.invoke.return_value = {
         "answer": "测试回答",
         "sources": [],
-        "intent": "drug_inquiry",
+        "intent": "clinical",
         "intent_confidence": 0.95,
-        "template_used": "default",
+        "template_used": "case_summary",
         "error": None,
     }
 

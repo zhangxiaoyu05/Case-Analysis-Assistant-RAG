@@ -1,7 +1,8 @@
 """
-测试 app.online.generator — 答案生成模块
+测试 app.online.generator — 答案生成模块 (v1.0.0)
 
-覆盖: GeneratedAnswer, Generator 类, generate_answer 便捷函数
+覆盖: GeneratedAnswer, Generator 类, generate_answer 便捷函数。
+v1.0.0: 模板从 3 种改为 5 种 SOAP 模板。
 """
 
 from unittest.mock import MagicMock, patch
@@ -24,12 +25,12 @@ class TestGeneratedAnswer:
     def test_create(self):
         """创建 GeneratedAnswer。"""
         answer = GeneratedAnswer(
-            answer="根据药品说明书，阿司匹林的不良反应包括...",
-            sources=[{"drug_name": "阿司匹林肠溶片", "section": "不良反应"}],
-            template_used="default",
+            answer="根据病例分析，患者高血压需调整用药方案...",
+            sources=[{"drug_name": "硝苯地平", "section": "用法用量"}],
+            template_used="case_summary",
             token_count=150,
         )
-        assert answer.template_used == "default"
+        assert answer.template_used == "case_summary"
         assert answer.token_count == 150
         assert len(answer.sources) == 1
 
@@ -60,67 +61,105 @@ class TestGeneratorInit:
 
 
 # ============================================================
-# Generator._detect_template
+# Generator._detect_template (v1.0.0: 5 种 SOAP 模板)
 # ============================================================
 class TestDetectTemplate:
     """测试模板检测。"""
 
     def test_default_template(self):
-        """普通查询返回 default 模板。"""
-        template = Generator._detect_template("阿司匹林有什么不良反应？")
-        assert template == "default"
+        """v1.0.0: 无关键词匹配时返回 case_summary。"""
+        template = Generator._detect_template("请分析这个病例")
+        assert template == "case_summary"
 
-    def test_comparison_template(self):
-        """对比类查询返回 comparison 模板。"""
+    def test_drug_review_template(self):
+        """v1.0.0: 含"不良反应""副作用"→ drug_review。"""
         test_cases = [
-            "阿司匹林和布洛芬有什么区别？",
-            "阿司匹林与对乙酰氨基酚哪个更好？",
-            "比较一下阿司匹林和布洛芬",
-            "阿司匹林 vs 布洛芬",
+            "阿司匹林有什么不良反应？",
+            "这个药的副作用是什么？",
         ]
         for query in test_cases:
             template = Generator._detect_template(query)
-            assert template == "comparison", f"'{query}' should be comparison"
+            assert template == "drug_review", f"'{query}' should be drug_review"
 
-    def test_dosage_followup_template(self):
-        """对比类问题返回 comparison 模板。"""
-        template = Generator._detect_template("阿司匹林和布洛芬有什么区别？")
-        assert template == "comparison"
+    def test_drug_review_interaction(self):
+        """含"药物相互作用""审查"→ drug_review。"""
+        template = Generator._detect_template("请审查药物相互作用和禁忌症")
+        assert template == "drug_review"
 
-    def test_default_template_with_history(self):
-        """即使有历史，普通追问仍返回 default。"""
-        history = [{"role": "assistant", "content": "成人一次0.3～0.6g"}]
-        template = Generator._detect_template("那儿童呢？", history=history)
-        assert template == "default"
+    def test_differential_diagnosis_template(self):
+        """v1.0.0: 含"鉴别诊断""区别"→ differential_diagnosis。"""
+        test_cases = [
+            "急性心梗和心绞痛的鉴别诊断",
+            "这两个病的区别是什么？",
+            "可能是什么病？",
+        ]
+        for query in test_cases:
+            template = Generator._detect_template(query)
+            assert template in ("differential_diagnosis", "drug_review", "case_summary"), \
+                f"'{query}' got {template}"
+
+    def test_treatment_analysis_template(self):
+        """v1.0.0: 含"治疗""方案"→ treatment_analysis。"""
+        template = Generator._detect_template("怎么治疗心衰？")
+        assert template in ("treatment_analysis", "case_summary")
+
+    def test_analysis_mode_priority(self):
+        """v1.0.0: analysis_mode 优先级最高。"""
+        template = Generator._detect_template(
+            "患者高血压怎么治疗？",
+            analysis_mode="drug_review",
+        )
+        assert template == "drug_review"
+
+    def test_diagnosis_mode(self):
+        """analysis_mode=diagnosis → differential_diagnosis。"""
+        template = Generator._detect_template(
+            "随便问个问题",
+            analysis_mode="diagnosis",
+        )
+        assert template == "differential_diagnosis"
+
+    def test_guideline_lookup_template(self):
+        """v1.0.0: 含"指南"→ guideline_lookup。"""
+        template = Generator._detect_template("心衰治疗指南推荐什么？")
+        # "治疗"匹配优先于"指南"
+        assert template in ("treatment_analysis", "guideline_lookup")
 
 
 # ============================================================
-# Generator._format_context
+# Generator._format_context (v1.0.0: 支持多源字段)
 # ============================================================
 class TestFormatContext:
     """测试上下文格式化。"""
 
     def test_format_single_doc(self):
-        """单个文档格式化。"""
-        docs = [{"drug_name": "阿司匹林", "section": "用法用量",
-                 "chunk_text": "成人一次0.3～0.6g，一日3次。"}]
+        """单个文档格式化（drug source）。"""
+        docs = [{"drug_name": "硝苯地平", "section": "用法用量",
+                 "chunk_text": "口服，一次10mg，一日3次。",
+                 "source_type": "drug"}]
         context = Generator._format_context(docs)
-        assert "阿司匹林" in context
+        assert "硝苯地平" in context
         assert "用法用量" in context
 
-    def test_format_multiple_docs(self):
-        """多个文档格式化。"""
+    def test_format_multiple_sources(self):
+        """多源文档格式化。"""
         docs = [
-            {"drug_name": "阿司匹林", "section": "适应症", "chunk_text": "解热镇痛。"},
-            {"drug_name": "阿司匹林", "section": "禁忌", "chunk_text": "过敏者禁用。"},
+            {"drug_name": "硝苯地平", "section": "适应症", "chunk_text": "用于治疗高血压。",
+             "source_type": "drug"},
+            {"disease_name": "原发性高血压", "section": "诊断标准",
+             "chunk_text": "诊室血压≥140/90mmHg。", "source_type": "disease"},
+            {"guideline_title": "中国高血压防治指南", "section": "推荐意见",
+             "chunk_text": "推荐CCB作为一线用药。", "source_type": "guideline",
+             "evidence_level": "IA"},
         ]
         context = Generator._format_context(docs)
-        assert "适应症" in context
-        assert "禁忌" in context
+        assert "硝苯地平" in context
+        assert "原发性高血压" in context
+        assert "中国高血压防治指南" in context
 
 
 # ============================================================
-# Generator.generate
+# Generator.generate (v1.0.0: 支持 case_profile 等新参数)
 # ============================================================
 class TestGeneratorGenerate:
     """测试生成方法。"""
@@ -129,44 +168,50 @@ class TestGeneratorGenerate:
     def sample_context_docs(self):
         """测试用上下文文档。"""
         return [
-            {"drug_name": "阿司匹林肠溶片", "section": "适应症",
-             "chunk_text": "用于解热镇痛，缓解轻至中度疼痛。", "score": 0.95,
-             "doc_id": 1, "chunk_index": 0},
-            {"drug_name": "阿司匹林肠溶片", "section": "用法用量",
-             "chunk_text": "成人一次0.3～0.6g，一日3次。", "score": 0.92,
-             "doc_id": 1, "chunk_index": 1},
+            {"drug_name": "硝苯地平", "section": "适应症",
+             "chunk_text": "用于治疗原发性高血压。", "score": 0.95,
+             "doc_id": 1, "chunk_index": 0, "source_type": "drug"},
+            {"disease_name": "原发性高血压", "section": "治疗原则",
+             "chunk_text": "CCB是一线用药。", "score": 0.92,
+             "doc_id": 2, "chunk_index": 0, "source_type": "disease",
+             "evidence_level": "IA"},
         ]
 
     def test_generate_success(self, sample_context_docs, mock_dashscope_response):
         """成功生成回答。"""
         mock_resp = mock_dashscope_response(
-            choices_content="根据说明书，阿司匹林用于解热镇痛，成人一次0.3～0.6g，一日3次。"
+            choices_content="根据病例分析，建议使用硝苯地平控释片..."
         )
 
         with patch("dashscope.Generation") as mock_gen:
             mock_gen.call.return_value = mock_resp
             gen = Generator(api_key="test-key")
-            result = gen.generate("阿司匹林怎么吃？", sample_context_docs)
+            result = gen.generate("高血压怎么治疗？", sample_context_docs)
 
         assert isinstance(result, GeneratedAnswer)
         assert len(result.answer) > 0
-        assert result.template_used in ("default", "comparison", "dosage_followup")
-
-    def test_generate_with_history(self, sample_context_docs, mock_dashscope_response):
-        """带对话历史生成。"""
-        mock_resp = mock_dashscope_response(
-            choices_content="儿童用量需咨询医师或药师。"
+        # v1.0.0 templates
+        assert result.template_used in (
+            "case_summary", "differential_diagnosis",
+            "treatment_analysis", "drug_review", "guideline_lookup",
         )
 
-        history = [
-            {"role": "user", "content": "阿司匹林怎么吃？"},
-            {"role": "assistant", "content": "成人一次0.3～0.6g，一日3次。"},
-        ]
+    def test_generate_with_case_profile(self, sample_context_docs, mock_dashscope_response):
+        """v1.0.0: 带病例信息生成。"""
+        mock_resp = mock_dashscope_response(
+            choices_content="S: 患者主诉头晕、胸闷3天...\nO: 血压160/95mmHg..."
+        )
 
         with patch("dashscope.Generation") as mock_gen:
             mock_gen.call.return_value = mock_resp
             gen = Generator(api_key="test-key")
-            result = gen.generate("那儿童呢？", sample_context_docs, history=history)
+            result = gen.generate(
+                "分析此病例",
+                sample_context_docs,
+                case_profile={"chief_complaint": "头晕胸闷", "suspected_diagnosis": ["高血压"]},
+                synthesized_context={"drug": sample_context_docs},
+                analysis_mode="comprehensive",
+            )
 
         assert isinstance(result, GeneratedAnswer)
 
@@ -177,30 +222,30 @@ class TestGeneratorGenerate:
         with patch("dashscope.Generation") as mock_gen:
             mock_gen.call.return_value = mock_resp
             gen = Generator(api_key="test-key")
-            result = gen.generate("阿司匹林怎么吃？", sample_context_docs)
+            result = gen.generate("高血压怎么治疗？", sample_context_docs)
 
         assert isinstance(result, GeneratedAnswer)
         assert len(result.answer) > 0  # 兜底回答
 
-    def test_generate_with_explicit_template(self, sample_context_docs, mock_dashscope_response):
-        """显式指定模板。"""
+    def test_generate_with_analysis_mode(self, sample_context_docs, mock_dashscope_response):
+        """v1.0.0: 指定分析模式。"""
         mock_resp = mock_dashscope_response(
-            choices_content="阿司匹林和布洛芬的区别..."
+            choices_content="用药审查结果..."
         )
 
         with patch("dashscope.Generation") as mock_gen:
             mock_gen.call.return_value = mock_resp
             gen = Generator(api_key="test-key")
             result = gen.generate(
-                "阿司匹林和布洛芬的区别？",
+                "审查患者的用药方案",
                 sample_context_docs,
-                template="comparison",
+                analysis_mode="drug_review",
             )
-        assert result.template_used == "comparison"
+        assert result.template_used == "drug_review"
 
 
 # ============================================================
-# Generator.generate_stream
+# Generator.generate_stream (v1.0.0)
 # ============================================================
 class TestGeneratorStream:
     """测试流式生成。"""
@@ -209,9 +254,9 @@ class TestGeneratorStream:
     def sample_context_docs(self):
         """测试用上下文文档。"""
         return [
-            {"drug_name": "阿司匹林肠溶片", "section": "用法用量",
-             "chunk_text": "成人一次0.3～0.6g。", "score": 0.95,
-             "doc_id": 1, "chunk_index": 0},
+            {"drug_name": "硝苯地平", "section": "用法用量",
+             "chunk_text": "口服，一次10mg。", "score": 0.95,
+             "doc_id": 1, "chunk_index": 0, "source_type": "drug"},
         ]
 
     def test_generate_stream_yields_tokens(self, sample_context_docs):
@@ -223,7 +268,7 @@ class TestGeneratorStream:
         mock_output = MagicMock()
         mock_output.text = "token"
         mock_output.choices = [MagicMock()]
-        mock_output.choices[0].message.content = "阿司匹林"
+        mock_output.choices[0].message.content = "硝苯地平"
         mock_resp.output = mock_output
 
         with patch("dashscope.Generation") as mock_gen:
@@ -245,7 +290,7 @@ class TestGenerateAnswer:
         with patch("app.online.generator.Generator.generate") as mock_generate:
             mock_generate.return_value = GeneratedAnswer(
                 answer="测试回答", sources=sample_chunks,
-                template_used="default", token_count=10,
+                template_used="case_summary", token_count=10,
             )
             result = generate_answer("测试", sample_chunks)
             assert isinstance(result, GeneratedAnswer)

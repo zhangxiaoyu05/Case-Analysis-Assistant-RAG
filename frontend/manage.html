@@ -144,6 +144,15 @@ input[type="file"] { display: none; }
 .form-group input:focus { border-color: var(--primary); box-shadow: 0 0 0 3px rgba(13,148,136,.08); }
 .upload-status { font-size: 12px; margin-top: 8px; min-height: 18px; }
 
+/* Source tabs */
+.source-tab {
+  padding: 6px 14px; border-radius: 20px; border: 1px solid var(--border);
+  background: transparent; color: var(--text-secondary); cursor: pointer;
+  font-size: 12px; font-family: inherit; transition: .15s;
+}
+.source-tab:hover { border-color: var(--primary); color: var(--primary); }
+.source-tab.active { background: var(--primary); color: #fff; border-color: var(--primary); }
+
 /* Drug list */
 .drug-list { max-height: 400px; overflow-y: auto; }
 .drug-item {
@@ -197,7 +206,7 @@ input[type="file"] { display: none; }
   </div>
   <div style="text-align:right">
     <div class="header-title">⚙️ 知识库管理</div>
-    <div class="header-subtitle">上传药品说明书 · 管理已入库药品</div>
+    <div class="header-subtitle">上传文档 · 管理知识库（药品/疾病/指南/文献）</div>
   </div>
 </header>
 
@@ -233,17 +242,28 @@ input[type="file"] { display: none; }
 
   <!-- Upload -->
   <div class="card">
-    <div class="card-title" style="margin-bottom:16px">📄 上传药品说明书</div>
+    <div class="card-title" style="margin-bottom:16px">📄 上传文档入库</div>
     <div class="upload-zone" id="dropZone">
       <div class="icon">📁</div>
       <div class="title">点击选择文件或拖拽到此处</div>
-      <div class="hint">支持 PDF、DOCX、TXT 格式</div>
+      <div class="hint">支持 PDF、DOCX、TXT 格式，最大 20MB</div>
       <div class="file-name" id="fileName"></div>
     </div>
     <input type="file" id="fileInput" accept=".pdf,.docx,.txt">
-    <div class="form-group">
-      <label>药品名称（选填）</label>
-      <input type="text" id="drugNameInput" placeholder="留空则从文件名自动推断...">
+    <div class="form-row" style="display:flex;gap:12px;margin-bottom:12px">
+      <div class="form-group" style="flex:2;margin-bottom:0">
+        <label>来源类型</label>
+        <select id="sourceTypeSelect" style="width:100%;padding:9px 12px;border:1px solid var(--border);border-radius:8px;font-size:13px;font-family:inherit;outline:none;background:#fff">
+          <option value="drug">💊 药品说明书</option>
+          <option value="disease">🦠 疾病知识</option>
+          <option value="guideline">📋 临床指南</option>
+          <option value="literature">📄 学术文献</option>
+        </select>
+      </div>
+      <div class="form-group" style="flex:3;margin-bottom:0">
+        <label>名称（选填）</label>
+        <input type="text" id="drugNameInput" placeholder="留空则从文件名自动推断...">
+      </div>
     </div>
     <div class="form-group">
       <label style="display:flex;align-items:center;gap:6px;cursor:pointer;font-weight:400">
@@ -256,13 +276,20 @@ input[type="file"] { display: none; }
     <div class="upload-status" id="uploadStatus"></div>
   </div>
 
-  <!-- Drug List -->
+  <!-- v1.0.0: Multi-source list -->
   <div class="card">
     <div class="card-header">
-      <span class="card-title">📋 已入库药品 <span style="font-weight:400;color:var(--text-muted);font-size:12px" id="drugCount"></span></span>
-      <button class="btn btn-ghost btn-sm" onclick="refreshDrugs()">🔄 刷新</button>
+      <span class="card-title">📋 知识库概览 <span style="font-weight:400;color:var(--text-muted);font-size:12px" id="sourceCounts"></span></span>
+      <button class="btn btn-ghost btn-sm" onclick="refreshSources()">🔄 刷新</button>
     </div>
-    <div class="drug-list" id="drugList">
+    <!-- Source tabs -->
+    <div style="display:flex;gap:6px;margin-bottom:14px;flex-wrap:wrap" id="sourceTabs">
+      <button class="source-tab active" data-source="drug" onclick="switchSourceTab('drug')">💊 药品</button>
+      <button class="source-tab" data-source="disease" onclick="switchSourceTab('disease')">🦠 疾病</button>
+      <button class="source-tab" data-source="guideline" onclick="switchSourceTab('guideline')">📋 指南</button>
+      <button class="source-tab" data-source="literature" onclick="switchSourceTab('literature')">📄 文献</button>
+    </div>
+    <div class="drug-list" id="sourceList">
       <div class="empty-hint">加载中...</div>
     </div>
   </div>
@@ -294,13 +321,14 @@ if (API_KEY) {
 }
 
 const API = '/api/v1';
+let currentSource = 'drug';
 
 // ============================================================
 // Init
 // ============================================================
 document.addEventListener('DOMContentLoaded', () => {
   checkHealth();
-  refreshDrugs();
+  refreshSources();
   setupDragDrop();
 });
 
@@ -368,7 +396,9 @@ async function uploadDocument() {
   const form = new FormData();
   form.append('file', file);
   const drugName = document.getElementById('drugNameInput').value.trim();
+  const sourceType = document.getElementById('sourceTypeSelect').value;
   if (drugName) form.append('drug_name', drugName);
+  form.append('source_type', sourceType);
   form.append('desensitize', document.getElementById('desensitizeCheck').checked);
 
   try {
@@ -376,8 +406,8 @@ async function uploadDocument() {
     const d = await r.json();
     if (!r.ok) throw new Error(d.detail || '上传失败');
     status.innerHTML = `<span style="color:#10b981">✅ 入库成功！${d.drug_name}: ${d.indexed_chunks}/${d.total_chunks} chunks 已索引</span>`;
-    showToast(`已入库: ${d.drug_name} (${d.indexed_chunks} chunks)`, 'success');
-    refreshDrugs();
+    showToast(`已入库 [${sourceType}]: ${d.drug_name} (${d.indexed_chunks} chunks)`, 'success');
+    refreshSources();
     checkHealth();
     fileInput.value = '';
     document.getElementById('fileName').textContent = '';
@@ -394,42 +424,101 @@ async function uploadDocument() {
 // ============================================================
 // Drug List
 // ============================================================
-async function refreshDrugs() {
-  const container = document.getElementById('drugList');
-  const count = document.getElementById('drugCount');
+// ============================================================
+// Source tabs & multi-source list (v1.0.0)
+// ============================================================
+function switchSourceTab(source) {
+  currentSource = source;
+  document.querySelectorAll('.source-tab').forEach(t => {
+    t.classList.toggle('active', t.dataset.source === source);
+  });
+  refreshSources();
+}
+
+async function refreshSources() {
+  const container = document.getElementById('sourceList');
+  const countEl = document.getElementById('sourceCounts');
+  const sourceType = currentSource;
+
   try {
+    // Try the multi-source endpoint, fall back to drug-only if 404
+    let data;
+    try {
+      const r = await fetch(`${API}/knowledge/sources`);
+      if (r.ok) {
+        data = await r.json();
+        // Update counts (summary)
+        if (data.counts) {
+          const parts = [];
+          const labels = { drug: '药品', disease: '疾病', guideline: '指南', literature: '文献' };
+          for (const [st, cnt] of Object.entries(data.counts)) {
+            parts.push(`${labels[st] || st}: ${cnt}`);
+          }
+          countEl.textContent = parts.join(' · ');
+        }
+        // Show items for current source
+        const items = data.items && data.items[sourceType] ? data.items[sourceType] : [];
+        renderSourceItems(container, items, sourceType);
+        return;
+      }
+    } catch (e) {
+      // Fall back to drug-only endpoint
+    }
+
+    // Fallback: use existing /knowledge/drugs endpoint
     const r = await fetch(`${API}/knowledge/drugs`);
     if (!r.ok) throw new Error('查询失败');
     const d = await r.json();
-    count.textContent = d.drugs.length ? `(${d.drugs.length} 种药品)` : '';
-    if (!d.drugs.length) {
-      container.innerHTML = '<div class="empty-hint">暂无已入库药品，请上传药品说明书</div>';
-      return;
-    }
-    container.innerHTML = d.drugs.map(dr => `
-      <div class="drug-item">
-        <div>
-          <div class="name">${escHtml(dr.drug_name)}</div>
-          <div class="meta">${escHtml(dr.category || '未分类')} · ${dr.chunk_count} chunks</div>
-        </div>
-        <div class="right">
-          <span class="drug-count">${dr.chunk_count}</span>
-          <button class="btn-danger-sm" onclick="deleteDrug(${dr.id},'${escHtml(dr.drug_name)}')" title="删除">×</button>
-        </div>
-      </div>`).join('');
-  } catch {
+    countEl.textContent = d.drugs.length ? `药品: ${d.drugs.length}` : '';
+    const items = d.drugs.map(dr => ({
+      id: dr.id, title: dr.drug_name, chunk_count: dr.chunk_count, category: dr.category
+    }));
+    renderSourceItems(container, items, 'drug');
+  } catch (e) {
     container.innerHTML = '<div class="empty-hint" style="color:#ef4444">加载失败，请检查服务状态</div>';
   }
 }
 
-async function deleteDrug(id, name) {
+function renderSourceItems(container, items, sourceType) {
+  if (!items.length) {
+    const labels = { drug: '药品', disease: '疾病知识', guideline: '临床指南', literature: '学术文献' };
+    container.innerHTML = `<div class="empty-hint">暂无已入库${labels[sourceType] || '文档'}，请上传文档</div>`;
+    return;
+  }
+  container.innerHTML = items.map(dr => `
+    <div class="drug-item">
+      <div>
+        <div class="name">${escHtml(dr.title || dr.drug_name || '未命名')}</div>
+        <div class="meta">${escHtml(dr.category || dr.study_type || dr.issuing_body || '')} · ${dr.chunk_count || 0} chunks</div>
+      </div>
+      <div class="right">
+        <span class="drug-count">${dr.chunk_count || 0}</span>
+        <button class="btn-danger-sm" onclick="deleteSourceItem('${sourceType}',${dr.id},'${escHtml(dr.title || dr.drug_name || '')}')" title="删除">×</button>
+      </div>
+    </div>`).join('');
+}
+
+async function deleteSourceItem(sourceType, id, name) {
   if (!confirm(`确定要删除 "${name}" 吗？\n将同时清除 MySQL 和 Milvus 中的所有相关数据。`)) return;
   try {
-    const r = await fetch(`${API}/knowledge/drug/${id}`, { method: 'DELETE' });
-    if (!r.ok) throw new Error('删除失败');
-    showToast(`已删除: ${name}`, 'success');
-    refreshDrugs();
+    // Try generic delete endpoint
+    const r = await fetch(`${API}/knowledge/source/${sourceType}/${id}`, { method: 'DELETE' });
+    if (r.status === 404) {
+      // Fallback to drug delete
+      const r2 = await fetch(`${API}/knowledge/drug/${id}`, { method: 'DELETE' });
+      if (!r2.ok) throw new Error('删除失败');
+    } else if (!r.ok) {
+      throw new Error('删除失败');
+    }
+    showToast(`已删除 [${sourceType}]: ${name}`, 'success');
+    refreshSources();
   } catch (e) { showToast('删除失败: ' + e.message, 'error'); }
+}
+
+// Backward compat: old refreshDrugs
+async function refreshDrugs() {
+  currentSource = 'drug';
+  refreshSources();
 }
 
 // ============================================================

@@ -4,10 +4,10 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <meta name="api-key" content="__API_KEY_PLACEHOLDER__">
-<title>药品知识问答 — RAG Pharma</title>
+<title>临床病例分析助手 — RAG Clinical</title>
 <style>
 /* ============================================================
-   CSS Variables — Botanical warm theme
+   CSS Variables — Clinical teal theme
    ============================================================ */
 :root {
   --primary: #0d9488;
@@ -102,7 +102,6 @@ body {
 
 .btn-new-chat:hover { background: var(--primary-light); color: var(--primary); border-color: var(--primary); }
 
-/* Conversation list */
 .conv-list {
   flex: 1; overflow-y: auto;
   padding: 4px 12px;
@@ -121,7 +120,6 @@ body {
 }
 
 .conv-item:hover { background: var(--bg); }
-
 .conv-item.active { background: var(--primary-light); color: var(--primary); font-weight: 500; }
 
 .conv-item-title {
@@ -143,7 +141,6 @@ body {
   font-size: 13px; color: var(--text-muted);
 }
 
-/* Sidebar footer */
 .sidebar-footer {
   padding: 12px 16px;
   border-top: 1px solid var(--border);
@@ -160,14 +157,13 @@ body {
 .btn-sidebar-footer:hover { color: var(--danger); background: var(--danger-bg); }
 
 /* ============================================================
-   Main Content (right)
+   Main Content
    ============================================================ */
 .main-content {
   flex: 1; display: flex; flex-direction: column;
   height: 100vh; overflow: hidden;
 }
 
-/* Header */
 .chat-header {
   padding: 12px 24px;
   border-bottom: 1px solid var(--border);
@@ -183,10 +179,7 @@ body {
   outline: none; max-width: 400px;
 }
 
-.chat-title:focus {
-  border-bottom: 2px solid var(--primary);
-}
-
+.chat-title:focus { border-bottom: 2px solid var(--primary); }
 .chat-title::placeholder { color: var(--text-muted); }
 
 .chat-header-right { display: flex; gap: 8px; align-items: center; }
@@ -204,10 +197,8 @@ body {
 }
 
 .empty-state .icon { font-size: 56px; margin-bottom: 16px; }
-
 .empty-state h2 { font-size: 20px; font-weight: 600; margin-bottom: 6px; color: var(--text); }
-
-.empty-state p { font-size: 14px; color: var(--text-muted); max-width: 360px; line-height: 1.6; }
+.empty-state p { font-size: 14px; color: var(--text-muted); max-width: 420px; line-height: 1.6; }
 
 /* Message bubbles */
 .message {
@@ -216,7 +207,6 @@ body {
 }
 
 .message.user { align-self: flex-end; flex-direction: row-reverse; }
-
 .message.assistant { align-self: flex-start; }
 
 .msg-avatar {
@@ -226,7 +216,6 @@ body {
 }
 
 .message.user .msg-avatar { background: var(--primary-100); }
-
 .message.assistant .msg-avatar { background: var(--primary); color: #fff; }
 
 .msg-bubble {
@@ -234,6 +223,7 @@ body {
   border-radius: 12px;
   font-size: 14px; line-height: 1.65;
   overflow-wrap: break-word;
+  min-width: 0;
 }
 
 .message.user .msg-bubble {
@@ -247,33 +237,26 @@ body {
   border-bottom-left-radius: 4px;
 }
 
-/* Markdown in assistant messages */
-	.msg-bubble h2 { font-size: 16px; font-weight: 700; margin: 14px 0 6px; color: var(--text); }
-	.msg-bubble h3 { font-size: 15px; font-weight: 600; margin: 12px 0 6px; color: var(--text); }
-	.msg-bubble h4, .msg-bubble h5, .msg-bubble h6 { font-size: 14px; font-weight: 600; margin: 10px 0 4px; }
+/* Markdown */
+.msg-bubble h2 { font-size: 16px; font-weight: 700; margin: 14px 0 6px; color: var(--text); }
+.msg-bubble h3 { font-size: 15px; font-weight: 600; margin: 12px 0 6px; color: var(--text); }
+.msg-bubble h4, .msg-bubble h5, .msg-bubble h6 { font-size: 14px; font-weight: 600; margin: 10px 0 4px; }
 .msg-bubble h3:first-child { margin-top: 0; }
 .msg-bubble ul, .msg-bubble ol { padding-left: 20px; margin: 6px 0; }
 .msg-bubble li { margin-bottom: 2px; }
 .msg-bubble p { margin: 6px 0; }
 .msg-bubble strong { font-weight: 600; }
-
-/* Horizontal rule */
 .msg-bubble hr { border: none; border-top: 1px solid var(--border); margin: 14px 0; }
-
-/* Blockquote */
 .msg-bubble blockquote {
   border-left: 3px solid var(--primary); padding: 6px 12px; margin: 8px 0;
   background: var(--primary-light); border-radius: 0 8px 8px 0; color: var(--text-secondary);
 }
 .msg-bubble blockquote p { margin: 0; }
-
-/* Inline code */
 .msg-bubble code {
   background: var(--primary-100); color: var(--primary-hover);
   padding: 1px 6px; border-radius: 4px; font-size: 13px; font-family: "SF Mono", "Fira Code", "Cascadia Code", monospace;
 }
 
-/* Table */
 .table-wrapper { overflow-x: auto; margin: 10px 0; }
 .msg-bubble table {
   width: 100%; border-collapse: collapse; font-size: 13px;
@@ -301,7 +284,6 @@ body {
 }
 
 .sources-list { display: none; margin-top: 8px; }
-
 .sources-list.show { display: block; }
 
 .source-item {
@@ -313,7 +295,18 @@ body {
   font-size: 12px; line-height: 1.5;
 }
 
-.source-item .src-drug {
+.source-item .src-type {
+  display: inline-block;
+  padding: 1px 6px; border-radius: 4px;
+  font-size: 10px; font-weight: 600; text-transform: uppercase;
+  margin-right: 6px;
+}
+.src-type-drug { background: #dbeafe; color: #1e40af; }
+.src-type-disease { background: #fce7f3; color: #9d174d; }
+.src-type-guideline { background: #d1fae5; color: #065f46; }
+.src-type-literature { background: #fef3c7; color: #92400e; }
+
+.source-item .src-name {
   font-weight: 600; color: var(--primary);
 }
 
@@ -321,22 +314,78 @@ body {
   color: var(--text-secondary); margin-left: 6px;
 }
 
-/* Loading dots */
-.loading-dots {
-  display: flex; gap: 4px; padding: 4px 0;
+.source-item .src-evidence {
+  display: inline-block;
+  margin-left: 6px; padding: 0 4px;
+  background: var(--primary-light);
+  color: var(--primary-hover);
+  border-radius: 3px;
+  font-size: 10px; font-weight: 600;
 }
 
-.loading-dots span {
-  width: 6px; height: 6px; border-radius: 50%;
-  background: var(--text-muted); animation: dot 1.4s infinite;
+/* File upload area */
+.file-upload-area {
+  border: 2px dashed var(--border);
+  border-radius: 8px;
+  padding: 8px 12px;
+  margin-bottom: 8px;
+  text-align: center;
+  cursor: pointer;
+  transition: .15s;
+  position: relative;
+  display: flex; align-items: center; justify-content: center;
+  gap: 8px;
+  font-size: 12px; color: var(--text-muted);
+  min-height: 36px;
 }
 
-.loading-dots span:nth-child(2) { animation-delay: .2s; }
-.loading-dots span:nth-child(3) { animation-delay: .4s; }
+.file-upload-area:hover, .file-upload-area.dragover {
+  border-color: var(--primary);
+  background: var(--primary-light);
+  color: var(--primary);
+}
 
-@keyframes dot {
-  0%, 80%, 100% { transform: scale(.6); opacity: .4; }
-  40% { transform: scale(1); opacity: 1; }
+.file-upload-area.has-file {
+  border-color: var(--success);
+  background: #f0fdf4;
+  color: var(--success);
+}
+
+.file-info {
+  display: flex; align-items: center; gap: 6px;
+}
+
+.file-remove {
+  cursor: pointer; color: var(--text-muted);
+  font-size: 14px; padding: 2px;
+}
+.file-remove:hover { color: var(--danger); }
+
+/* Analysis mode */
+.analysis-mode-row {
+  display: flex; gap: 6px;
+  margin-bottom: 8px;
+  flex-wrap: wrap;
+}
+
+.mode-chip {
+  padding: 4px 10px;
+  border-radius: 16px;
+  border: 1px solid var(--border);
+  background: var(--card);
+  font-size: 11px; cursor: pointer;
+  font-family: inherit;
+  color: var(--text-secondary);
+  transition: .15s;
+  white-space: nowrap;
+}
+
+.mode-chip:hover { border-color: var(--primary); color: var(--primary); }
+.mode-chip.active {
+  background: var(--primary-light);
+  color: var(--primary);
+  border-color: var(--primary);
+  font-weight: 500;
 }
 
 /* Input Area */
@@ -357,7 +406,7 @@ body {
 
 .input-wrapper textarea {
   width: 100%;
-  padding: 10px 14px; padding-right: 40px;
+  padding: 10px 14px;
   border: 1px solid var(--border);
   border-radius: 10px;
   font-size: 14px; font-family: inherit;
@@ -373,10 +422,14 @@ body {
   box-shadow: 0 0 0 3px var(--primary-light);
 }
 
+.input-options {
+  display: flex; align-items: center; justify-content: space-between;
+  margin-top: 6px;
+}
+
 .memory-toggle {
   display: flex; align-items: center; gap: 6px;
   font-size: 11px; color: var(--text-muted);
-  margin-top: 6px;
   cursor: pointer; user-select: none;
 }
 
@@ -416,24 +469,6 @@ body {
 .btn-send:hover { background: var(--primary-hover); }
 .btn-send:disabled { opacity: .4; cursor: not-allowed; }
 
-/* Unauthenticated state */
-.unauth-overlay {
-  position: fixed; top: 0; left: 0; right: 0; bottom: 0;
-  background: var(--bg);
-  display: flex; align-items: center; justify-content: center;
-  z-index: 999;
-}
-
-.unauth-box {
-  text-align: center;
-}
-
-.unauth-box .icon { font-size: 48px; margin-bottom: 12px; }
-
-.unauth-box h2 { font-size: 18px; margin-bottom: 6px; }
-
-.unauth-box p { font-size: 13px; color: var(--text-muted); margin-bottom: 16px; }
-
 /* Toast */
 .toast {
   position: fixed; top: 20px; right: 20px;
@@ -453,6 +488,24 @@ body {
   from { transform: translateX(100%); opacity: 0; }
   to { transform: translateX(0); opacity: 1; }
 }
+
+/* Loading dots */
+.loading-dots {
+  display: flex; gap: 4px; padding: 4px 0;
+}
+
+.loading-dots span {
+  width: 6px; height: 6px; border-radius: 50%;
+  background: var(--text-muted); animation: dot 1.4s infinite;
+}
+
+.loading-dots span:nth-child(2) { animation-delay: .2s; }
+.loading-dots span:nth-child(3) { animation-delay: .4s; }
+
+@keyframes dot {
+  0%, 80%, 100% { transform: scale(.6); opacity: .4; }
+  40% { transform: scale(1); opacity: 1; }
+}
 </style>
 </head>
 <body>
@@ -467,16 +520,16 @@ body {
       <span id="sidebarUsername"></span>
     </div>
     <div class="sidebar-actions">
-      <button class="btn-icon" title="设置" onclick="window.location.href='/manage'">⚙</button>
+      <button class="btn-icon" title="知识库管理" onclick="window.location.href='/manage'">⚙</button>
     </div>
   </div>
 
   <button class="btn-new-chat" id="btnNewChat" onclick="createNewChat()">
-    ＋ 新对话
+    ＋ 新病例分析
   </button>
 
   <div class="conv-list" id="convList">
-    <div class="conv-empty">暂无对话记录<br>点击上方按钮开始</div>
+    <div class="conv-empty">暂无分析记录<br>点击上方按钮开始</div>
   </div>
 
   <div class="sidebar-footer">
@@ -489,40 +542,61 @@ body {
      Main Content
      ============================================================ -->
 <main class="main-content" id="mainContent">
-  <!-- Header -->
   <div class="chat-header">
     <input type="text" class="chat-title" id="chatTitle"
-           placeholder="新对话" maxlength="100"
+           placeholder="新病例分析" maxlength="100"
            onchange="updateTitle(this.value)">
     <div class="chat-header-right">
-      <button class="btn-icon" title="删除对话" onclick="deleteCurrentChat()">🗑</button>
+      <button class="btn-icon" title="删除分析" onclick="deleteCurrentChat()">🗑</button>
     </div>
   </div>
 
-  <!-- Messages -->
   <div class="chat-messages" id="chatMessages">
     <div class="empty-state" id="emptyState">
-      <div class="icon">💊</div>
-      <h2>药品知识问答助手</h2>
-      <p>可以问我药品的适应症、用法用量、禁忌、不良反应、药物相互作用等问题。</p>
+      <div class="icon">🏥</div>
+      <h2>临床病例分析助手</h2>
+      <p>上传病例文档（PDF/DOCX/TXT），或直接输入病例文本。<br>
+      支持 SOAP 格式综合分析、鉴别诊断、诊疗评估、用药审查。</p>
     </div>
   </div>
 
-  <!-- Input -->
   <div class="chat-input-area">
+    <!-- File Upload -->
+    <div class="file-upload-area" id="fileUploadArea"
+         onclick="document.getElementById('fileInput').click()">
+      <span id="fileUploadText">📎 点击或拖拽上传病例文档（PDF/DOCX/TXT）</span>
+      <span id="fileInfo" class="file-info" style="display:none;">
+        <span id="fileName"></span>
+        <span class="file-remove" onclick="removeFile(event)" title="移除文件">✕</span>
+      </span>
+    </div>
+    <input type="file" id="fileInput" accept=".pdf,.docx,.txt" style="display:none"
+           onchange="handleFileSelect(event)">
+
+    <!-- Analysis Mode -->
+    <div class="analysis-mode-row" id="modeRow">
+      <button class="mode-chip active" data-mode="comprehensive" onclick="selectMode(this)">📋 综合分析</button>
+      <button class="mode-chip" data-mode="diagnosis" onclick="selectMode(this)">🔬 鉴别诊断</button>
+      <button class="mode-chip" data-mode="treatment" onclick="selectMode(this)">💊 诊疗评估</button>
+      <button class="mode-chip" data-mode="drug_review" onclick="selectMode(this)">💉 用药审查</button>
+    </div>
+
     <div class="input-row">
       <div class="input-wrapper">
-        <textarea id="userInput" rows="1"
-                  placeholder="输入药品相关问题..."
+        <textarea id="userInput" rows="2"
+                  placeholder="输入病例文本和问题，或上传文件后输入分析要求..."
                   onkeydown="handleKeyDown(event)"></textarea>
       </div>
       <button class="btn-send" id="btnSend" onclick="sendMessage()" disabled>➤</button>
     </div>
-    <label class="memory-toggle" title="开启后 AI 会记住当前对话的上下文">
-      <input type="checkbox" id="memoryToggle" checked onchange="toggleMemory()">
-      <span class="toggle-track"></span>
-      短期记忆
-    </label>
+    <div class="input-options">
+      <label class="memory-toggle" title="开启后 AI 会记住当前对话的上下文">
+        <input type="checkbox" id="memoryToggle" checked onchange="toggleMemory()">
+        <span class="toggle-track"></span>
+        短期记忆
+      </label>
+      <span style="font-size:10px;color:var(--text-muted);">Shift+Enter 换行</span>
+    </div>
   </div>
 </main>
 
@@ -539,15 +613,18 @@ if (!TOKEN || !USERNAME) {
 
 const API_BASE = '/api/v1';
 
-async function api(path, method = 'GET', body = null) {
+async function api(path, method = 'GET', body = null, isFormData = false) {
   const opts = {
     method,
-    headers: {
-      'Content-Type': 'application/json',
-      'Authorization': `Bearer ${TOKEN}`,
-    },
+    headers: {},
   };
-  if (body) opts.body = JSON.stringify(body);
+  if (isFormData) {
+    opts.body = body;  // FormData, don't set Content-Type
+  } else {
+    opts.headers['Content-Type'] = 'application/json';
+    if (body) opts.body = JSON.stringify(body);
+  }
+  opts.headers['Authorization'] = `Bearer ${TOKEN}`;
 
   const res = await fetch(`${API_BASE}${path}`, opts);
 
@@ -565,7 +642,7 @@ async function api(path, method = 'GET', body = null) {
   return data;
 }
 
-// Init
+// Init sidebar
 (function initSidebar() {
   const cachedDisplayName = localStorage.getItem('rag_display_name');
   if (cachedDisplayName) {
@@ -575,7 +652,6 @@ async function api(path, method = 'GET', body = null) {
     document.getElementById('sidebarUsername').textContent = USERNAME;
     document.getElementById('sidebarAvatar').textContent = USERNAME.charAt(0).toUpperCase();
   }
-  // Async: fetch latest display_name from server
   api('/user/settings').then(settings => {
     const displayName = settings.display_name || settings.username;
     document.getElementById('sidebarUsername').textContent = displayName;
@@ -586,14 +662,92 @@ async function api(path, method = 'GET', body = null) {
     } else {
       localStorage.removeItem('rag_display_name');
     }
-  }).catch(() => { /* fallback to cached/username — already shown */ });
+  }).catch(() => {});
 })();
 
 let currentSessionId = null;
 let enableMemory = true;
+let currentMode = 'comprehensive';
+let selectedFile = null;
 
 // ============================================================
-// Sidebar — Conversation List
+// File Upload
+// ============================================================
+const fileUploadArea = document.getElementById('fileUploadArea');
+const fileInput = document.getElementById('fileInput');
+
+fileUploadArea.addEventListener('dragover', (e) => {
+  e.preventDefault();
+  fileUploadArea.classList.add('dragover');
+});
+
+fileUploadArea.addEventListener('dragleave', () => {
+  fileUploadArea.classList.remove('dragover');
+});
+
+fileUploadArea.addEventListener('drop', (e) => {
+  e.preventDefault();
+  fileUploadArea.classList.remove('dragover');
+  const files = e.dataTransfer.files;
+  if (files.length > 0) {
+    setFile(files[0]);
+  }
+});
+
+function handleFileSelect(event) {
+  const files = event.target.files;
+  if (files.length > 0) {
+    setFile(files[0]);
+  }
+}
+
+function setFile(file) {
+  const ext = file.name.split('.').pop().toLowerCase();
+  if (!['pdf', 'docx', 'txt'].includes(ext)) {
+    showToast('不支持的文件格式: .' + ext + '（支持 PDF/DOCX/TXT）', 'error');
+    return;
+  }
+  if (file.size > 20 * 1024 * 1024) {
+    showToast('文件过大（' + (file.size/1024/1024).toFixed(1) + 'MB），请上传小于 20MB 的文件', 'error');
+    return;
+  }
+  selectedFile = file;
+  document.getElementById('fileUploadText').style.display = 'none';
+  document.getElementById('fileInfo').style.display = 'flex';
+  document.getElementById('fileName').textContent = '📄 ' + file.name + ' (' + formatSize(file.size) + ')';
+  fileUploadArea.classList.add('has-file');
+  document.getElementById('btnSend').disabled = false;
+}
+
+function removeFile(event) {
+  event.stopPropagation();
+  selectedFile = null;
+  fileInput.value = '';
+  document.getElementById('fileUploadText').style.display = '';
+  document.getElementById('fileInfo').style.display = 'none';
+  fileUploadArea.classList.remove('has-file');
+  if (!document.getElementById('userInput').value.trim()) {
+    document.getElementById('btnSend').disabled = true;
+  }
+}
+
+function formatSize(bytes) {
+  if (bytes < 1024) return bytes + ' B';
+  if (bytes < 1024*1024) return (bytes/1024).toFixed(1) + ' KB';
+  return (bytes/(1024*1024)).toFixed(1) + ' MB';
+}
+
+// ============================================================
+// Analysis Mode
+// ============================================================
+function selectMode(chip) {
+  document.querySelectorAll('.mode-chip').forEach(c => c.classList.remove('active'));
+  chip.classList.add('active');
+  currentMode = chip.dataset.mode;
+}
+
+// ============================================================
+// Sidebar — Conversations
 // ============================================================
 async function loadConversations() {
   try {
@@ -601,7 +755,7 @@ async function loadConversations() {
     const list = document.getElementById('convList');
 
     if (data.conversations.length === 0) {
-      list.innerHTML = '<div class="conv-empty">暂无对话记录<br>点击上方按钮开始</div>';
+      list.innerHTML = '<div class="conv-empty">暂无分析记录<br>点击上方按钮开始</div>';
       return;
     }
 
@@ -609,7 +763,7 @@ async function loadConversations() {
       <div class="conv-item${c.session_id === currentSessionId ? ' active' : ''}"
            data-sid="${c.session_id}"
            onclick="switchToChat('${c.session_id}')">
-        <span class="conv-item-title">${escapeHtml(c.title || '新对话')}</span>
+        <span class="conv-item-title">${escapeHtml(c.title || '新病例分析')}</span>
         <span class="conv-item-del" onclick="event.stopPropagation(); deleteChat('${c.session_id}')" title="删除">×</span>
       </div>
     `).join('');
@@ -625,13 +779,14 @@ async function createNewChat() {
     document.getElementById('chatTitle').value = '';
     document.getElementById('chatMessages').innerHTML = `
       <div class="empty-state" id="emptyState">
-        <div class="icon">💊</div>
-        <h2>药品知识问答助手</h2>
-        <p>可以问我药品的适应症、用法用量、禁忌、不良反应、药物相互作用等问题。</p>
+        <div class="icon">🏥</div>
+        <h2>临床病例分析助手</h2>
+        <p>上传病例文档，或直接输入病例文本。<br>支持 SOAP 格式综合分析、鉴别诊断、诊疗评估、用药审查。</p>
       </div>
     `;
-    document.getElementById('btnSend').disabled = true;
+    document.getElementById('btnSend').disabled = !selectedFile && !document.getElementById('userInput').value.trim();
     document.getElementById('userInput').value = '';
+    removeFileSilent();
     document.getElementById('userInput').focus();
     loadConversations();
   } catch (err) {
@@ -639,13 +794,21 @@ async function createNewChat() {
   }
 }
 
+function removeFileSilent() {
+  selectedFile = null;
+  fileInput.value = '';
+  document.getElementById('fileUploadText').style.display = '';
+  document.getElementById('fileInfo').style.display = 'none';
+  fileUploadArea.classList.remove('has-file');
+}
+
 async function switchToChat(sessionId) {
   currentSessionId = sessionId;
   document.getElementById('chatMessages').innerHTML = '';
-  document.getElementById('btnSend').disabled = true;
+  document.getElementById('btnSend').disabled = !selectedFile && !document.getElementById('userInput').value.trim();
   document.getElementById('userInput').value = '';
+  removeFileSilent();
 
-  // 加载对话历史和标题
   try {
     const conv = await api(`/conversations/${sessionId}`);
     document.getElementById('chatTitle').value = conv.title || '';
@@ -663,9 +826,9 @@ async function switchToChat(sessionId) {
     } else {
       document.getElementById('chatMessages').innerHTML = `
         <div class="empty-state" id="emptyState">
-          <div class="icon">💊</div>
-          <h2>药品知识问答助手</h2>
-          <p>可以问我药品的适应症、用法用量、禁忌、不良反应、药物相互作用等问题。</p>
+          <div class="icon">🏥</div>
+          <h2>临床病例分析助手</h2>
+          <p>上传病例文档，或直接输入病例文本。<br>支持 SOAP 格式综合分析、鉴别诊断、诊疗评估、用药审查。</p>
         </div>
       `;
     }
@@ -678,7 +841,7 @@ async function switchToChat(sessionId) {
 }
 
 async function deleteChat(sessionId) {
-  if (!confirm('确定删除此对话？对话内容将被清除。')) return;
+  if (!confirm('确定删除此分析记录？')) return;
 
   try {
     await api(`/conversations/${sessionId}`, 'DELETE');
@@ -687,15 +850,15 @@ async function deleteChat(sessionId) {
       document.getElementById('chatTitle').value = '';
       document.getElementById('chatMessages').innerHTML = `
         <div class="empty-state" id="emptyState">
-          <div class="icon">💊</div>
-          <h2>药品知识问答助手</h2>
-          <p>可以问我药品的适应症、用法用量、禁忌、不良反应、药物相互作用等问题。</p>
+          <div class="icon">🏥</div>
+          <h2>临床病例分析助手</h2>
+          <p>上传病例文档，或直接输入病例文本。<br>支持 SOAP 格式综合分析、鉴别诊断、诊疗评估、用药审查。</p>
         </div>
       `;
       document.getElementById('btnSend').disabled = true;
     }
     loadConversations();
-    showToast('对话已删除', 'success');
+    showToast('分析记录已删除', 'success');
   } catch (err) {
     showToast('删除失败: ' + err.message, 'error');
   }
@@ -711,14 +874,13 @@ async function deleteCurrentChat() {
 // ============================================================
 function appendMessage(role, content, sources = null) {
   const container = document.getElementById('chatMessages');
-  // Remove empty state if present
   const empty = document.getElementById('emptyState');
   if (empty) empty.remove();
 
   const div = document.createElement('div');
   div.className = `message ${role}`;
 
-  const avatarIcon = role === 'user' ? '👤' : '💊';
+  const avatarIcon = role === 'user' ? '👤' : '🏥';
   div.innerHTML = `
     <div class="msg-avatar">${avatarIcon}</div>
     <div class="msg-bubble">
@@ -733,47 +895,62 @@ function appendMessage(role, content, sources = null) {
 
 function renderSources(sources) {
   if (!sources || sources.length === 0) return '';
+
+  // Group by source_type
+  const groups = {};
+  sources.forEach(s => {
+    const type = s.source_type || 'drug';
+    if (!groups[type]) groups[type] = [];
+    groups[type].push(s);
+  });
+
+  const typeLabels = {
+    drug: '💊 药品',
+    disease: '🦠 疾病',
+    guideline: '📜 指南',
+    literature: '📄 文献',
+  };
+
   let html = '<div class="sources-section">';
   html += '<button class="sources-toggle" onclick="var l=this.nextElementSibling;l.classList.toggle(\'show\');this.textContent=l.classList.contains(\'show\')?\'▲ 收起来源\':\'▼ 查看来源 (' + sources.length + ')\'">▼ 查看来源 (' + sources.length + ')</button>';
   html += '<div class="sources-list">';
-  sources.forEach((s, i) => {
-    html += `<div class="source-item">`;
-    html += `<span class="src-drug">${escapeHtml(s.drug_name || '')}</span>`;
-    if (s.section) html += `<span class="src-section">[${escapeHtml(s.section)}]</span>`;
-    if (s.score != null) html += ` <span style="color:var(--text-muted);font-size:11px;">(相关度: ${Number(s.score).toFixed(3)})</span>`;
-    html += `<div>${escapeHtml((s.chunk_text || '').substring(0, 200))}...</div>`;
-    html += `</div>`;
-  });
+
+  for (const [type, items] of Object.entries(groups)) {
+    const label = typeLabels[type] || type;
+    html += `<div style="font-weight:600;font-size:11px;margin:8px 0 4px;color:var(--text-secondary);">${label} (${items.length})</div>`;
+    items.forEach((s, i) => {
+      const name = s.drug_name || s.disease_name || s.guideline_title || '';
+      const srcTypeClass = 'src-type-' + (type || 'drug');
+      html += `<div class="source-item">`;
+      html += `<span class="src-type ${srcTypeClass}">${type || 'drug'}</span>`;
+      if (name) html += `<span class="src-name">${escapeHtml(name)}</span>`;
+      if (s.section) html += `<span class="src-section">[${escapeHtml(s.section)}]</span>`;
+      if (s.evidence_level) html += `<span class="src-evidence">${escapeHtml(s.evidence_level)}</span>`;
+      if (s.score != null) html += ` <span style="color:var(--text-muted);font-size:10px;">(相关度: ${Number(s.score).toFixed(3)})</span>`;
+      html += `<div style="margin-top:2px;">${escapeHtml((s.chunk_text || '').substring(0, 200))}...</div>`;
+      html += `</div>`;
+    });
+  }
+
   html += '</div></div>';
   return html;
 }
 
-// Markdown renderer — block-level line-by-line parser.
-// Supports: headings (h1-h6), hr, blockquote, tables, unordered/ordered lists,
-// inline bold/italic/code, and paragraphs.
+// Markdown renderer
 function renderMarkdown(text) {
   if (!text) return '';
 
-  // Pre-process: normalize line breaks — convert any literal <br> tags
-  // the LLM may output into regular newlines before parsing
   text = text.replace(/<br\s*\/?>/gi, '\n');
+  text = text.replace(/^\\(#{1,6})(\s)/gm, '$1$2');
+  text = text.replace(/^\\(>)(\s?)/gm, '$1$2');
+  text = text.replace(/^\\([-*])(\s)/gm, '$1$2');
+  text = text.replace(/^\\(\d+\.)(\s)/gm, '$1$2');
+  text = text.replace(/^\\(---+|[-*_]{3,})\s*$/gm, '$1');
 
-  // Pre-process: strip backslash-escaped Markdown syntax at line start.
-  // Some LLMs (e.g. qwen3.7-plus) output \###, \---, \>, \- etc. as
-  // "protective escaping". Remove the leading backslash so the main
-  // parser can recognise headings / hr / blockquotes / lists.
-  text = text.replace(/^\\(#{1,6})(\s)/gm, '$1$2');     // \###  -> ###
-  text = text.replace(/^\\(>)(\s?)/gm, '$1$2');          // \>    -> >
-  text = text.replace(/^\\([-*])(\s)/gm, '$1$2');        // \- item -> - item
-  text = text.replace(/^\\(\d+\.)(\s)/gm, '$1$2');        // \1.   -> 1.
-  text = text.replace(/^\\(---+|[-*_]{3,})\s*$/gm, '$1'); // \---  -> ---
-
-  // ---- helpers ----
   const esc = (s) => String(s)
     .replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
 
   const inline = (s) => {
-    // must run AFTER escaping
     s = s.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
     s = s.replace(/\*(.+?)\*/g, '<em>$1</em>');
     s = s.replace(/`([^`]+)`/g, '<code>$1</code>');
@@ -788,50 +965,36 @@ function renderMarkdown(text) {
     const raw = lines[i];
     const trimmed = raw.trim();
 
-    // blank line
-    if (trimmed === '') {
-      i++;
-      continue;
-    }
+    if (trimmed === '') { i++; continue; }
 
-    // ---- horizontal rule ----
     if (/^(\\---|\*\s*\*\s*\*|---+|___+|[-*_]{3,})\s*$/.test(trimmed)) {
-      html += '<hr>';
-      i++;
-      continue;
+      html += '<hr>'; i++; continue;
     }
 
-    // ---- headings ----
     const hMatch = trimmed.match(/^(#{1,6})\s+(.+)$/);
     if (hMatch) {
       const level = hMatch[1].length;
       html += '<h' + level + '>' + inline(esc(hMatch[2])) + '</h' + level + '>';
-      i++;
-      continue;
+      i++; continue;
     }
 
-    // ---- blockquote ----
     if (trimmed.startsWith('> ')) {
       const bqLines = [];
       while (i < lines.length && lines[i].trim().startsWith('> ')) {
-        bqLines.push(lines[i].trim().slice(2));
-        i++;
+        bqLines.push(lines[i].trim().slice(2)); i++;
       }
       html += '<blockquote><p>' + inline(bqLines.map(l => esc(l)).join('<br>')) + '</p></blockquote>';
       continue;
     }
 
-    // ---- table (detect separator row) ----
     if (trimmed.includes('|') && i + 1 < lines.length) {
       const nextTrimmed = lines[i + 1].trim();
       if (/^\|?[\s:-]+\|[\s|:-]+\|?$/.test(nextTrimmed)) {
-        // header row
         const headers = trimmed.split('|').map(c => c.trim()).filter(c => c !== '');
-        i += 2; // skip separator
+        i += 2;
         const bodyRows = [];
         while (i < lines.length && lines[i].trim().includes('|')) {
-          const cells = lines[i].trim().split('|').map(c => c.trim()).filter(c => c !== '');
-          bodyRows.push(cells);
+          bodyRows.push(lines[i].trim().split('|').map(c => c.trim()).filter(c => c !== ''));
           i++;
         }
         html += '<div class="table-wrapper"><table>';
@@ -845,36 +1008,30 @@ function renderMarkdown(text) {
       }
     }
 
-    // ---- unordered list (consecutive "- " or "* " lines) ----
     if (/^[-*]\s+/.test(trimmed)) {
       const items = [];
       while (i < lines.length && /^[-*]\s+/.test(lines[i].trim())) {
-        items.push(lines[i].trim().replace(/^[-*]\s+/, ''));
-        i++;
+        items.push(lines[i].trim().replace(/^[-*]\s+/, '')); i++;
       }
       html += '<ul>' + items.map(it => '<li>' + inline(esc(it)) + '</li>').join('') + '</ul>';
       continue;
     }
 
-    // ---- ordered list (consecutive "1. " lines) ----
     if (/^\d+\.\s+/.test(trimmed)) {
       const items = [];
       while (i < lines.length && /^\d+\.\s+/.test(lines[i].trim())) {
-        items.push(lines[i].trim().replace(/^\d+\.\s+/, ''));
-        i++;
+        items.push(lines[i].trim().replace(/^\d+\.\s+/, '')); i++;
       }
       html += '<ol>' + items.map(it => '<li>' + inline(esc(it)) + '</li>').join('') + '</ol>';
       continue;
     }
 
-    // ---- paragraph (default) ----
     const paraLines = [];
     while (i < lines.length && lines[i].trim() !== '' &&
            !/^(#{1,6}\s|> |[-*]\s+|\d+\.\s+|\\---|---+|\*\s*\*\s*\*)/.test(lines[i].trim()) &&
            !(lines[i].trim().includes('|') && i + 1 < lines.length &&
              /^\|?[\s:-]+\|[\s|:-]+\|?$/.test((lines[i+1]||'').trim()))) {
-      paraLines.push(lines[i].trim());
-      i++;
+      paraLines.push(lines[i].trim()); i++;
     }
     if (paraLines.length) {
       html += '<p>' + inline(paraLines.map(l => esc(l)).join('<br>')) + '</p>';
@@ -902,25 +1059,30 @@ async function sendMessage() {
   const input = document.getElementById('userInput');
   const btn = document.getElementById('btnSend');
   const message = input.value.trim();
-  if (!message) return;
+  if (!message && !selectedFile) return;
 
-  // Create session if none
   if (!currentSessionId) {
     await createNewChat();
+  }
+
+  // Build display text
+  let displayText = message;
+  if (selectedFile) {
+    displayText = (message ? '📎 ' + selectedFile.name + '\n\n' + message : '📎 ' + selectedFile.name);
   }
 
   input.value = '';
   input.style.height = 'auto';
   btn.disabled = true;
 
-  appendMessage('user', message);
+  appendMessage('user', displayText);
 
-  // Add loading bubble
+  // Loading bubble
   const container = document.getElementById('chatMessages');
   const loadingDiv = document.createElement('div');
   loadingDiv.className = 'message assistant';
   loadingDiv.innerHTML = `
-    <div class="msg-avatar">💊</div>
+    <div class="msg-avatar">🏥</div>
     <div class="msg-bubble"><div class="loading-dots"><span></span><span></span><span></span></div></div>
   `;
   container.appendChild(loadingDiv);
@@ -928,17 +1090,23 @@ async function sendMessage() {
 
   try {
     const token = localStorage.getItem('rag_token');
+
+    // Build FormData
+    const formData = new FormData();
+    formData.append('message', message);
+    if (selectedFile) {
+      formData.append('file', selectedFile);
+    }
+    formData.append('session_id', currentSessionId || '');
+    formData.append('analysis_mode', currentMode);
+    formData.append('enable_memory', enableMemory);
+
     const res = await fetch(`${API_BASE}/chat/stream`, {
       method: 'POST',
       headers: {
-        'Content-Type': 'application/json',
         'Authorization': `Bearer ${token}`,
       },
-      body: JSON.stringify({
-        message,
-        session_id: currentSessionId,
-        enable_memory: enableMemory,
-      }),
+      body: formData,
     });
 
     if (res.status === 401) {
@@ -952,10 +1120,10 @@ async function sendMessage() {
       throw new Error(errData.detail || `请求失败 (${res.status})`);
     }
 
-    // Remove loading, add real bubble
+    // Replace loading with real bubble
     const realDiv = document.createElement('div');
     realDiv.className = 'message assistant';
-    realDiv.innerHTML = `<div class="msg-avatar">💊</div><div class="msg-bubble"></div>`;
+    realDiv.innerHTML = `<div class="msg-avatar">🏥</div><div class="msg-bubble"></div>`;
     container.replaceChild(realDiv, loadingDiv);
 
     const bubble = realDiv.querySelector('.msg-bubble');
@@ -976,10 +1144,7 @@ async function sendMessage() {
 
       for (const line of lines) {
         if (!line.trim()) continue;
-
-        if (line.startsWith('event: sources')) {
-          continue; // next data line has the sources
-        }
+        if (line.startsWith('event: sources')) continue;
 
         if (line.startsWith('data: ')) {
           try {
@@ -989,42 +1154,30 @@ async function sendMessage() {
               fullAnswer += json.data;
               bubble.innerHTML = renderMarkdown(fullAnswer);
               scrollToBottom();
-            } else if (json.event === 'done') {
-              // Complete
-            } else if (json.event === 'sources') {
-              // Sources come via the 'sources' event type
-              // Parse the data field which is a JSON string of the sources array
             } else if (json.event === 'error') {
               throw new Error(json.data);
             }
           } catch (e) {
-            // Could be direct data (sources payload)
-            if (line.includes('"drug_name"') || line.includes('"chunk_text"')) {
+            if (line.includes('"drug_name"') || line.includes('"chunk_text"') || line.includes('"source_type"')) {
               try {
                 sources = JSON.parse(line.substring(6));
               } catch {}
-            } else if (!line.startsWith('data: {"event":')) {
-              // Raw token
             }
           }
         }
       }
     }
 
-    // Check for sources event from combined buffer
-    if (!fullAnswer && !sources) {
-      // fallback
-    }
-
-    // Add sources if available and not already rendered
+    // Add sources if not already rendered
     if (sources && sources.length > 0 && !bubble.innerHTML.includes('sources-section')) {
       bubble.innerHTML += renderSources(sources);
     }
 
-    // Reload conversation list to update title
+    // Clear the file after sending
+    removeFileSilent();
+
     loadConversations();
 
-    // Update title if this was first message
     setTimeout(async () => {
       try {
         const conv = await api(`/conversations/${currentSessionId}`);
@@ -1037,7 +1190,7 @@ async function sendMessage() {
 
   } catch (err) {
     loadingDiv.innerHTML = `
-      <div class="msg-avatar">💊</div>
+      <div class="msg-avatar">🏥</div>
       <div class="msg-bubble" style="color:var(--danger);">出错了: ${escapeHtml(err.message)}</div>
     `;
   } finally {
@@ -1087,7 +1240,7 @@ function showToast(msg, type = 'error') {
 document.getElementById('userInput').addEventListener('input', function() {
   this.style.height = 'auto';
   this.style.height = Math.min(this.scrollHeight, 120) + 'px';
-  document.getElementById('btnSend').disabled = !this.value.trim();
+  document.getElementById('btnSend').disabled = !this.value.trim() && !selectedFile;
 });
 
 // ============================================================

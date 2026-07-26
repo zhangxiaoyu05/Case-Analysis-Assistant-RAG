@@ -1,13 +1,19 @@
-# RAG 药品问答系统 - 项目进度记录
+# RAG 临床病例分析助手 - 项目进度记录
 
 > 本文件用于记录每一步操作，便于在新对话窗口中快速恢复上下文。
 > 每次操作后需同步更新此文件。
+> v1.0.0 Phase 1 完成时间：2026-07-25 | Phase 2 完成时间：2026-07-26 | 当前测试数：407 ✅
 
 ---
 
 ## 📌 项目概述
 
-- **项目名称**: RAG 药品问答系统
+- **项目名称**: RAG 临床病例分析助手（原 RAG 药品问答系统）
+- **当前版本**: v1.0.0-Phase2
+- **项目路径**: `D:\RAG_project\`
+- **技术栈**: LangChain + LangGraph + Milvus + MySQL + Redis + Docker
+- **模型提供商**: 通义千问（DASHSCOPE_API_KEY）
+  - 对话生成: qwen3-max | 门禁判断: qwen-flash | 病例提取: qwen-flash | 嵌入: text-embedding-v4 | 重排序: qwen3-rerank
 - **项目路径**: `D:\RAG_project\`
 - **技术栈**: LangChain + LangGraph + Milvus + MySQL + Redis + Docker
 - **模型提供商**: 通义千问（DASHSCOPE_API_KEY）
@@ -17,6 +23,203 @@
 ---
 
 ## ✅ 已完成步骤
+
+### 步骤 46: Phase 1 — 核心流程改造 (v0.5.0 → v1.0.0-Phase1)
+
+**操作时间**: 2026-07-25
+
+**改造范围**: 药品问答系统 → 临床病例分析助手（Phase 1 最小可行验证）
+
+**改动文件**（15 个）:
+
+| 文件 | 改动类型 | 说明 |
+|------|---------|------|
+| `config/prompts.yaml` | 重写 | gatekeeper → clinical_related；新增 case_extraction + 5 个 SOAP 模板 |
+| `config/config.yaml` | 更新 | 注释更新 + case_extraction 模型配置 |
+| `app/online/intent.py` | 重写 | drug_related → clinical_related；关键词从药品扩展为临床医学 |
+| `app/online/generator.py` | 重写 | 3 模板 → 5 模板；新增 case_profile/synthesized_context/analysis_mode 参数 |
+| `app/graph/state.py` | 扩展 | 新增 case_profile/search_queries/search_breakdown/synthesized_context/file_name/analysis_mode |
+| `app/graph/nodes.py` | 重写 | 8 节点：新增 case_preprocess_node + synthesize_node；retrieve_node → multi_retrieve_node |
+| `app/graph/edges.py` | 重写 | clinical → case_preprocess；新增 route_after_case_preprocess |
+| `app/graph/graph.py` | 重写 | 8 节点新流程：intent → case_preprocess → multi_retrieve → rank → synthesize → generate |
+| `app/api/routers/chat.py` | 重写 | multipart/form-data；文件上传 + 病例预处理内联 |
+| `app/schemas/chat.py` | 扩展 | SourceDoc 新增 source_type/evidence_level/disease_name/guideline_title |
+| `app/config.py` | 扩展 | 新增 case_extraction_model/temperature/max_tokens 配置属性 |
+| `app/api/main.py` | 更新 | 版本 0.5.0 → 1.0.0，标题/描述更新 |
+| `pyproject.toml` | 更新 | 版本 + 描述更新 |
+| `frontend/index.html` | 重写 | 文件拖拽上传 + 分析模式选择 + 来源按类型分组渲染 |
+| `tests/` | 更新 | 5 个测试文件更新（intent/nodes/edges/graph/state）；chat 测试适配 multipart |
+| `README.md` | 重写 | v1.0.0 文档 |
+
+**新流程图**:
+```
+START → intent ──┬─ clinical → case_preprocess → multi_retrieve → rank → synthesize → generate → END
+                  ├─ chitchat → END
+                  └─ not_clinical → reject → END
+```
+
+**关键设计决策**:
+- Phase 1 不涉及数据库变更，用现有 drug_chunks 验证病例分析可行性
+- 病例预处理：LLM (qwen-flash) 结构化提取 + 超长文本零 token 正则预提取
+- 多路检索：Phase 1 统一检索 drug_chunks；Phase 2 扩展到 4 个 collection
+- 上下文合成：按 disease/guideline/drug/literature 四维度组织
+- 错误降级：门禁失败 → 放行；提取失败 → 规则回退；检索失败 → 跳过；生成失败 → 返回原文
+- 向后兼容：GateResult 保留 drug_related 属性别名；parse_response 兼容新旧 JSON 键名
+
+**测试状态**: 72 核心测试全部通过（state 7 / edges 9 / nodes 25 / graph 13 / intent 18）
+
+---
+
+### 步骤 47: Phase 2.7-2.9 — 三种新切分器实现
+
+**操作时间**: 2026-07-25
+
+**操作内容**:
+创建了 3 个针对不同文档格式的专用文本切分器，以及对应的单元测试。
+
+| 文件 | 行数 | 功能 |
+|------|------|------|
+| `app/offline/splitter_disease.py` | ~288 行 | 疾病知识切分器：Markdown 标题 → 编号列表 → 关键词行 → 回退字符切分 |
+| `app/offline/splitter_guideline.py` | ~207 行 | 临床指南切分器：编号章节 + 推荐等级检测 + 证据级别检测 |
+| `app/offline/splitter_literature.py` | ~267 行 | 学术文献切分器：IMRaD 结构（英文+中文）+ 三段式回退 + 牛津证据等级推断 |
+| `tests/test_offline/test_new_splitters.py` | 177 行 | 17 个测试：疾病(6) + 指南(6) + 文献(5) |
+
+**关键设计**:
+- 三个新切分器共用 `splitter_disease.py` 中的 `_split_by_chars()` 和 `_merge_short_chunks()` 辅助函数（节约 ~100 行重复代码）
+- chunk_size 默认 800（疾病/指南/文献知识密度高于药品说明书）
+- 每个切分器均支持命令行直接测试：`python -m app.offline.splitter_disease <file>`
+- 回退逻辑：无章节结构时自动回退到全文字符切分，确保任何格式都能处理
+- 证据级别：指南检测 GRADE 分级（A/B/C）和 ACC/AHA 分级（Ⅰ/Ⅱa/Ⅱb/Ⅲ）；文献按牛津循证医学中心标准（1a~5）
+
+**验证**: 17 个新测试全部通过，覆盖空文本/短文本/各种章节格式/回退逻辑。
+
+---
+
+### Bug 修复: `_split_by_chars()` 死循环导致内存耗尽 → PyCharm 崩溃
+
+**操作时间**: 2026-07-25
+
+**问题**:
+用户反馈执行 Phase 2 测试时"半天卡进程执行不完，并且把 PyCharm 也关闭了"。测试 `test_custom_chunk_size`（输入 ~2000 字符，chunk_size=300, chunk_overlap=50）触发死循环。
+
+**根因**:
+`splitter_disease.py` 的 `_split_by_chars()` 函数（第 132-162 行）在处理文本末尾时缺少死循环防护：
+
+```
+文本末尾：end = len(text) = 2000
+处理后：  start = end - chunk_overlap = 2000 - 50 = 1950
+下一轮：  end = min(1950+300, 2000) = 2000
+          → end < len(text) → False → 不找分隔符（原已有 end == len(text) 的判断已跳过）
+          → chunk_text = text[1950:2000] → 50 字符
+          → start = 2000 - 50 = 1950  ← 和上一轮完全一样！
+          → 死循环 ♾️，Chunk 对象无限增长 → OOM → Python 崩溃 → PyCharm JVM 崩溃
+```
+
+**为什么之前没发现**: 原 `splitter.py` 的 `_split_section_content()` 函数有 `if len(chunks) >= 1 and start <= chunks[-1].char_count` 防死循环检查，但新写的 `_split_by_chars()` 漏掉了这个保护。
+
+**修复** (2 层防护):
+
+```python
+# 第 1 层：已到文本末尾，退出
+if end >= len(text):
+    break
+
+# 第 2 层：防止死循环——确保指针前进
+prev_start = start
+start = end - chunk_overlap
+if start <= prev_start:
+    start = prev_start + 1
+```
+
+**文件**: `app/offline/splitter_disease.py`（`splitter_guideline.py` 和 `splitter_literature.py` 通过 import 共用同一函数，自动受益）
+
+**验证**: 
+- 28 个 Phase 2 新测试: 1.51s ✅
+- 135 个离线流程测试: 2.94s ✅
+- 407 个全量测试: 70.24s ✅，零回归
+
+---
+
+### 步骤 48: Phase 2.3-2.6 — 数据库层扩展（多表 + 多 Collection）
+
+**操作时间**: 2026-07-25
+
+**操作内容**:
+
+| 子步骤 | 文件 | 改动 |
+|--------|------|------|
+| 2.1-2.2 | `scripts/migration_v3.sql` | **新建** — 6 张新表 DDL（disease_raw_docs/chunks, guideline_raw_docs/chunks, literature_raw_docs/chunks）+ index_records 增加 source_type 列 |
+| 2.3 | `app/db/mysql_client.py` | 新增 `insert_raw_doc_generic()` / `insert_chunks_batch_generic()` / `bm25_search_generic()` / `delete_by_id_generic()` / `get_table_stats_generic()` 等通用方法，按 source_type 路由到对应表 |
+| 2.4 | `app/db/milvus_client.py` | `__init__` 增加 `collection_name` 参数（默认 drug_chunks）；schema 从 drug 专用改为统一 `source_name` + `source_type` + `extra_field_1` + `extra_field_2` 结构；新增 `COLLECTION_NAMES` 常量；`search()` 兼容新旧 schema（自动回退 `drug_name` → `source_name`） |
+| 2.5 | `scripts/init_milvus.py` | 支持创建 4 个 collection（`--collections drug,disease,guideline`）；统一 schema 函数 `get_unified_schema()` |
+| 2.6 | `scripts/init_collection.py` | 健康检查从 4 张表 + 1 collection 扩展为 9 张表 + 4 collection |
+
+**Milvus 统一 Schema 设计**:
+```
+字段（4 个 collection 完全相同）:
+  id              INT64        auto_id, primary_key
+  doc_id          INT64
+  chunk_index     INT64
+  source_name     VARCHAR(200)  # drug_name / disease_name / guideline_title / title
+  source_type     VARCHAR(50)   # "drug" / "disease" / "guideline" / "literature"
+  section         VARCHAR(100)
+  chunk_text      VARCHAR(5000)
+  extra_field_1   VARCHAR(100)  # evidence_level（所有源共用）
+  extra_field_2   VARCHAR(100)  # drug: 空, disease: 空, guideline: recommendation_grade, literature: study_type
+  embedding       FLOAT_VECTOR[1024]
+```
+
+**向后兼容**: 旧 `drug_chunks` collection 保留 `drug_name` 字段不变；`retriever.py` 检索时自动兼容新旧 schema（`source_name or drug_name`）。
+
+---
+
+### 步骤 49: Phase 2.10-2.16 — Pipeline + 检索 + 前端 + CLI 多源扩展
+
+**操作时间**: 2026-07-25
+
+**操作内容**:
+
+| 子步骤 | 文件 | 改动 |
+|--------|------|------|
+| 2.10 | `app/offline/pipeline.py` | `_process_single_drug()` 新增 `source_type` 参数 + `**extra_fields`；切分步骤按 source_type 路由到 4 种切分器；MySQL/Milvus 入库按 source_type 路由到对应表/collection；metadata 按 source_type 映射到对应字段 |
+| 2.12 | `app/online/retriever.py` | 新增 `retrieve_from(query, source_type, top_n)` — 从指定 collection 检索；新增 `multi_source_retrieve(query, sources, top_n_per_source, final_top_n)` — 4 collection 并行检索 + 跨源 RRF 融合 + 去重 + 均衡采样 |
+| 2.13 | `app/graph/nodes.py` | `multi_retrieve_node` 从单一 drug_chunks 检索切换为真正的 4 collection 并行检索（`multi_source_retrieve`） |
+| 2.15 | `frontend/manage.html` | 新增来源类型筛选（全部/药品/疾病/指南/文献）；上传区域新增 source_type 下拉选择；已入库列表按 source_type 分类展示（带图标 💊/🦠/📋/📄） |
+| 2.11 | `scripts/run_offline.py` | 新增 `--source-type` 参数（drug/disease/guideline/literature）；新增 `--disease-name` / `--guideline-title` 等按源类型的可选参数 |
+| 2.16 | `tests/` | 新增 `test_retriever_multi_source.py`（11 个测试：均衡采样/单源检索/去重/故障隔离/默认源）；现有测试全面更新适配新 API；407 测试全通过 |
+
+**多源检索流程**:
+```
+search_queries[0..4]
+      │
+      ▼
+┌──────────────────────────────────────────────────┐
+│  multi_source_retrieve()                          │
+│                                                    │
+│  对每条 query 在 4 个 collection 并行检索:          │
+│  ┌───────────┐ ┌──────────┐ ┌─────────┐ ┌──────┐  │
+│  │drug (向量) │ │disease   │ │guideline│ │lit   │  │
+│  │ BM25      │ │BM25      │ │BM25     │ │BM25  │  │
+│  └───────────┘ └──────────┘ └─────────┘ └──────┘  │
+│           │         │          │          │         │
+│           ▼         ▼          ▼          ▼         │
+│    跨源 RRF 融合 → 去重 → 均衡采样 → Top-15        │
+└──────────────────────────────────────────────────┘
+```
+
+**均衡采样策略** (`_balanced_sample()`):
+- 每种 source_type 最少保留 `per_source_min`（默认 2）条
+- 总数不超过 `total_max`（默认 15）条
+- 优先保留高得分文档
+- 单一 source 无结果时不影响其他 source（故障隔离）
+
+**前端管理界面改进**:
+- 新增 4 个 Tab 切换来源类型，实时统计各类数据量
+- 上传表单：来源类型下拉选择 + 动态必填字段（药品名/疾病名/指南标题）
+- 已入库列表：每条记录带 source_type 彩色徽标
+- 删除操作：自动识别 source_type，调用对应 MySQL 表 + Milvus collection 清理
+
+---
 
 ### 步骤 1: Docker 环境部署 - docker-compose.yml
 
@@ -802,17 +1005,17 @@ pytest tests/ --cov=app       # 含覆盖率报告（需 pytest-cov）
 - Swagger 文档: `http://localhost:8000/docs`
 
 
-## ✅ 项目状态：全部完成（40/40 步骤 + 后续优化）
+## ✅ 项目状态：Phase 1 完成 + Phase 2 完成（50/50 步骤）
 
 | 模块 | 完成步骤 | 状态 |
 |------|----------|------|
 | 基础设施 (Docker) | 步骤 1, 8, 12 | ✅ |
 | 配置层 (.env, YAML) | 步骤 2, 5, 6, 13, 16, 35, 37, 39, 40 | ✅ |
-| 数据层 (Milvus/MySQL/Redis) | 步骤 3, 19-22, 34, 39, 40 | ✅ |
+| 数据层 (Milvus/MySQL/Redis) | 步骤 3, 19-22, 34, 39, 40, **48** | ✅ |
 | Schema 层 (Pydantic) | 步骤 17, 37 | ✅ |
-| 离线流程 (load->clean->split->embed) | 步骤 23, 33 | ✅ |
-| 在线流程 (intent->retrieve->rank->generate) | 步骤 24, 37, 优化 G | ✅ |
-| LangGraph 编排 | 步骤 25, 37, 39, 40 | ✅ |
+| 离线流程 (load->clean->split->embed) | 步骤 23, 33, **47**, **49** | ✅ |
+| 在线流程 (intent->retrieve->rank->generate) | 步骤 24, 37, 优化 G, **49** | ✅ |
+| LangGraph 编排 | 步骤 25, 37, 39, 40, **49** | ✅ |
 | API 端点 | 步骤 17, 25, 37, 39, 40 | ✅ |
 | API 鉴权与安全 | 步骤 35 | ✅ |
 | 用户系统 (注册/登录/JWT) | 步骤 39 | ✅ |
@@ -821,10 +1024,9 @@ pytest tests/ --cov=app       # 含覆盖率报告（需 pytest-cov）
 | 中期记忆 (跨会话) | 步骤 39 | ✅ |
 | 长期记忆 (用户画像) | 步骤 40 | ✅ |
 | 知识库管理 API | 步骤 29, 34 | ✅ |
-| 测试 (373 用例) | 步骤 27, 33, 35, 37, 38, 39, 40 | ✅ |
+| 测试 (407 用例) | 步骤 27, 33, 35, 37, 38, 39, 40, **47**, **49** | ✅ |
 | 测试数据 (20 药品) | 步骤 28 | ✅ |
-| 前端 Web 界面 | 步骤 30, 35, 36, 39 + 优化 F | ✅ |
-| 前端 Streamlit 界面 | 步骤 32, 37 | ✅ |
+| 前端 Web 界面 | 步骤 30, 35, 36, 39, **49** + 优化 F | ✅ |
 
 ---
 
@@ -1037,19 +1239,7 @@ python scripts/run_offline.py --file data/raw/布洛芬缓释胶囊.txt --dry-ru
 
 ---
 
-### 第 6 步：启动应用（二选一）
-
-#### 选项 A：Streamlit 前端（推荐，无需 FastAPI）
-
-```bash
-streamlit run frontend/streamlit_app.py
-```
-
-浏览器访问: **http://localhost:8501**
-
-功能：文件上传入库 + 流式智能问答 + 知识库状态查看
-
-#### 选项 B：FastAPI 后端 + Swagger 文档
+### 第 6 步：启动 FastAPI 应用
 
 ```bash
 uvicorn app.api.main:app --host 0.0.0.0 --port 8000 --reload
@@ -1062,7 +1252,7 @@ uvicorn app.api.main:app --host 0.0.0.0 --port 8000 --reload
 
 ### 第 7 步：验证
 
-用浏览器打开 Streamlit 或 FastAPI 前端，测试以下场景：
+用浏览器打开 FastAPI 前端，测试以下场景：
 
 | 测试问题 | 期望结果 |
 |----------|----------|
@@ -1096,7 +1286,6 @@ curl -X POST http://localhost:8000/api/v1/chat \
 | `init_collection.py` 报连接错误 | Docker 服务未就绪 | 等待 `docker compose ps` 全部显示 healthy 后再执行 |
 | `run_offline.py` 报 Milvus Collection 不存在 | 未执行初始化 | 先执行 `python scripts/init_collection.py` |
 | DashScope API 报错 | API Key 未配置或无效 | 检查 `.env` 中 `DASHSCOPE_API_KEY` 是否正确 |
-| Streamlit 页面打不开 | 防火墙拦截 | 检查 8501 端口，或添加 `--server.port 其他端口` |
 | 知识库统计显示 0 | 未入库任何文档 | 先执行第 5 步入库药品说明书 |
 
 ---
@@ -1108,18 +1297,20 @@ D:\RAG_project\
 ├── docker-compose.yml           ✅ 步骤 1 + 步骤 12（加入 rag-api 服务）
 ├── Dockerfile                  ✅ 步骤 12（多阶段构建，非 root 用户运行）
 ├── pyproject.toml              ✅ 步骤 11（包发布配置，入口点为 rag-api = "app.api.main:main"）
-├── requirements.txt           ✅ 步骤 4 + 步骤 32（新增 streamlit>=1.28.0）
+├── requirements.txt           ✅ 步骤 4（运行时依赖）
 ├── requirements-dev.txt        ✅ 步骤 13（开发/测试依赖）
 ├── .env                        ✅ 步骤 2
 ├── .env.example               ✅ 步骤 2 + 步骤 13（更新）
 ├── .gitignore                  ✅ 步骤 7
+├── PLAN_v1.0.0_case_analysis.md  ✅ Phase 1-4 迁移计划（1653 行）
 ├── scripts/
 │   ├── mysql_init.sql          ✅ 步骤 3
-│   ├── init_milvus.py          ✅ 步骤 19（Milvus Collection + 索引初始化）
-│   ├── init_collection.py      ✅ 步骤 20（统一初始化：MySQL + Milvus + Redis）
-│   ├── run_offline.py          ✅ 步骤 23（离线流程 CLI 入口）
+│   ├── init_milvus.py          ✅ 步骤 19 + 步骤 48（多 Collection 支持）
+│   ├── init_collection.py      ✅ 步骤 20 + 步骤 48（健康检查更新：9 表 + 4 Collection）
+│   ├── run_offline.py          ✅ 步骤 23 + 步骤 49（--source-type 参数）
 │   ├── split_drug_file.py      ✅ 优化 D（20 种药品合集拆分脚本）
 │   ├── migration_v2.sql        ✅ 步骤 39（Phase 0: users + conversations 表 DDL）
+│   ├── migration_v3.sql        ✅ 步骤 48（Phase 2: 6 张新表 + index_records 扩展）
 │   └── migration_memory.sql    ✅ 步骤 39-40（Phase 2+3: user_memories + user_profiles 表 DDL）
 ├── config/
 │   ├── config.yaml             ✅ 步骤 5 + 步骤 13（扩展配置项）+ 步骤 26（dimension 1536→1024）+ 步骤 39-40（user_memory + user_profile 配置节）
@@ -1149,19 +1340,23 @@ D:\RAG_project\
 │   │   ├── __init__.py         ✅ 统一导出 MilvusClient / MySQLClient
 │   │   ├── milvus_client.py    ✅ 步骤 21（Milvus 连接 + CRUD）
 │   │   └── mysql_client.py     ✅ 步骤 22（MySQL 连接池 + 4表CRUD + BM25检索）+ 步骤 26（total_chunks 参数修复）
-│   ├── offline/                ✅ 步骤 23
-│       ├── __init__.py         ✅ 统一导出离线流程 API
+│   ├── offline/                ✅ 步骤 23 + 步骤 33 + 步骤 47-49
+│       ├── __init__.py         ✅ 统一导出离线流程 API（含新切分器）
 │       ├── loader.py           ✅ 文档加载（PDF/DOCX/TXT + 药名推断）
 │       ├── cleaner.py          ✅ 文本清洗（伪影去除 + 规范化 + 可选脱敏）
-│       ├── splitter.py         ✅ 章节感知切分（【章节名】检测 + 中文分隔符）
-│       ├── embedder.py         ✅ DashScope 向量化（批处理 + 重试）+ 步骤 24（增加 text_type 参数）
-│       └── pipeline.py         ✅ 流程编排（load→clean→split→embed→MySQL+Milvus）
-│   ├── online/                 ✅ 步骤 24
+│       ├── splitter.py         ✅ 药品说明书章节感知切分（【章节名】检测 + 中文分隔符）
+│       ├── splitter_disease.py ✅ 步骤 47（疾病知识切分器：Markdown/编号/关键词）
+│       ├── splitter_guideline.py ✅ 步骤 47（指南切分器：章节编号 + 推荐等级 + 证据级别）
+│       ├── splitter_literature.py ✅ 步骤 47（文献切分器：IMRaD + 三段式回退）
+│       ├── multi_drug_splitter.py ✅ 步骤 33（多药品合集智能检测与拆分）
+│       ├── embedder.py         ✅ DashScope 向量化（批处理 + 重试）+ text_type 参数
+│       └── pipeline.py         ✅ 流程编排（load→clean→split→embed→MySQL+Milvus）+ source_type 路由
+│   ├── online/                 ✅ 步骤 24 + 步骤 49
 │       ├── __init__.py         ✅ 统一导出在线流程 API
-│       ├── intent.py           ✅ 意图识别（启发式 + LLM 双阶段，4 分类）+ 步骤 26（result_format 修复）+ 步骤 37（attack 关键词检测 + general 分类）
-│       ├── retriever.py        ✅ 混合检索（向量 + BM25 → RRF 融合）
-│       ├── ranker.py           ✅ 重排序（gte-rerank + 失败回退）
-│       └── generator.py        ✅ 答案生成（场景感知提示词 + LLM）+ 步骤 25（generate_stream）+ 步骤 26（result_format 修复）+ 步骤 37（general 模板支持）
+│       ├── intent.py           ✅ 意图识别（启发式 + LLM 双阶段，二元门禁 Gatekeeper）
+│       ├── retriever.py        ✅ 混合检索（向量 + BM25 → RRF）+ 步骤 49（多源并行检索 + 跨源 RRF）
+│       ├── ranker.py           ✅ 重排序（qwen3-rerank + 失败回退）
+│       └── generator.py        ✅ 答案生成（5 模板 SOAP 格式 + stream）
 │   ├── graph/                  ✅ 步骤 25
 │   │   ├── __init__.py         ✅ 统一导出 RagState / GraphResult / get_graph
 │   │   ├── state.py            ✅ RagState TypedDict + GraphResult dataclass
@@ -1176,19 +1371,19 @@ D:\RAG_project\
 │   │   ├── user_memory_manager.py  ✅ 步骤 39（中期记忆管理：LLM 提取 + 衰减 + 跨会话持久化）
 │   │   ├── user_profile_manager.py ✅ 步骤 40（长期记忆管理：LLM 提取 9 种人口属性 + INSERT ON DUPLICATE KEY UPDATE）
 │   │   └── conversation_manager.py ✅ 步骤 39（对话管理：首条消息自动生成标题）
-├── tests/                      ✅ 步骤 10 + 步骤 27 + 步骤 33 + 步骤 35 + 步骤 38-40（373 个测试用例）
-│   ├── conftest.py             ✅ 步骤 27 + 步骤 35 + 步骤 39（共享 fixtures + APP_API_KEY 默认空字符串向后兼容 + mock_user_token）
-│   ├── test_offline/           ✅ 步骤 27 + 步骤 33（62+31=93 个测试：loader/cleaner/splitter/embedder/pipeline/multi_drug_splitter）
-│   ├── test_online/            ✅ 步骤 27 + 步骤 37（51 个测试：intent/retriever/ranker/generator，含 4 分类测试 + 优化 G recall_patterns 安全网）
-│   ├── test_api/               ✅ 步骤 27 + 步骤 35 + 步骤 37 + 步骤 39（58+ 个测试：health/chat/history/auth/conversations，含 general/attack 流式测试 + JWT 鉴权）
-│   ├── test_graph/             ✅ 步骤 27 + 步骤 37（73 个测试：state/edges/nodes/graph，含 general_node/attack_node 测试）
-│   └── test_services/          ✅ 步骤 38-40（18+28+26+16=88 个测试：memory_manager/user_memory_manager/user_profile_manager/user_manager/conversation_manager）
+├── tests/                      ✅ 步骤 10 + 步骤 27 + 步骤 33 + 步骤 35 + 步骤 38-40 + 步骤 47 + 步骤 49（407 个测试用例）
+│   ├── conftest.py             ✅ 共享 fixtures + mock 客户端 + APP_API_KEY + mock_user_token
+│   ├── test_offline/           ✅ 93 + 17 = 110 个测试（loader/cleaner/splitter/embedder/pipeline/multi_drug_splitter/new_splitters）
+│   ├── test_online/            ✅ 51 + 11 = 62 个测试（intent/retriever/ranker/generator/multi_source）
+│   ├── test_api/               ✅ 58+ 个测试（health/chat/history/auth/conversations，含 general/attack 流式 + JWT）
+│   ├── test_graph/             ✅ 73 个测试（state/edges/nodes/graph，含 general_node/attack_node）
+│   └── test_services/          ✅ 88 个测试（memory/user_memory/user_profile/user/conversation）
 ├── frontend/
 │   ├── chat.html                 ✅ 步骤 36（问答页面）+ 优化 F（完整 Markdown 渲染引擎）+ Bug 修复（<br> 转义问题）
 │   ├── manage.html               ✅ 步骤 36（管理页面：卡片式布局）
 │   ├── login.html                 ✅ 步骤 39（登录/注册页面：JWT + localStorage 持久化）
 │   ├── index.html                 ✅ 步骤 30（旧版 SPA，已拆分为 chat + manage，保留兼容）
-│   └── streamlit_app.py          ✅ 步骤 32（~320行 Streamlit 前端）+ 步骤 37（4 意图分类）
+│   ├── profile.html               ✅ 步骤 41（用户个人资料页面，双卡片布局）
 ├── data/
 │   ├── raw/
 │   │   ├── 阿司匹林肠溶片说明书_test.txt  ✅ 步骤 8（单药测试文档）
@@ -1249,69 +1444,13 @@ D:\RAG_project\
 
 ---
 
-### 步骤 32: Streamlit 前端页面
+### 步骤 32: Streamlit 前端页面（⚠️ 已于 2026-07-25 弃用，见步骤 43）
 
 **操作时间**: 2026-06-16
 
-**背景**:
-原有的 `frontend/index.html` 是纯 HTML/CSS/JS 的 SPA（781 行手写 JavaScript），需要通过 FastAPI HTTP 接口通信。为快速搭建更简洁的前端，改用 Streamlit 框架（全 Python，零 JavaScript）。
+**状态**: ⛔ 已弃用。Streamlit 前端 `frontend/streamlit_app.py` 及 `streamlit` 依赖已移除，项目统一使用 FastAPI + 原生 HTML 前端。
 
-**操作内容**:
-
-创建了 `frontend/streamlit_app.py`（~320 行），基于 Streamlit 框架的全新前端页面：
-
-**功能模块**:
-
-| 模块 | 位置 | 功能 |
-|------|------|------|
-| 文件上传入库 | 侧边栏 | 拖拽/点击上传药品说明书（PDF/DOCX/TXT），自动调用 `run_pipeline` 完成 load→clean→split→embed→MySQL+Milvus 入库 |
-| 药品名称输入 | 侧边栏 | 可选，留空则从文件名自动推断药名 |
-| 知识库状态 | 侧边栏 | 实时显示 Milvus/MySQL/Redis 连接状态（🟢/🔴），药品数量和文本块数量（30s 缓存） |
-| 智能问答 | 主区域 | 流式对话界面，意图识别→混合检索→重排序→流式生成（逐 token 展示） |
-| 来源引用 | 主区域 | 每条回答可展开查看参考来源（药品名/章节/原文/得分） |
-| 闲聊识别 | 主区域 | 问候/寒暄自动返回友好回应，不触发检索流程 |
-| 清空对话 | 侧边栏 | 一键清除所有对话历史 |
-
-**关键设计**:
-- **直接调用模块**：`import app.online.*` / `app.offline.*`，不经过 FastAPI HTTP 接口，更高效
-- **流式展示**：调用 `Generator.generate_stream()` 逐 token 展示，与 FastAPI SSE 流式效果一致
-- **懒加载缓存**：MySQL/Milvus 客户端用 `@st.cache_resource` 缓存，避免每次刷新重连
-- **知识库统计**：用 `@st.cache_data(ttl=30)` 缓存 30 秒，减少数据库查询
-- **优雅降级**：Docker 服务未启动时显示红色状态灯 + 提示信息，不报错崩溃
-- **临时文件自动清理**：上传的文件写入临时目录，入库完成后自动删除
-
-**与 index.html 的区别**:
-
-| | `index.html` | `streamlit_app.py` |
-|------|------|------|
-| 本质 | 纯前端文件（HTML+CSS+JS） | Python 程序 |
-| 运行方式 | 浏览器加载静态文件 | Streamlit 服务器渲染 |
-| 需要 FastAPI | ✅ 必须启动 | ❌ 独立运行 |
-| 需要写 JS | ✅ 781 行手写 | ❌ 零 JS，全 Python |
-| 端口 | 8000（通过 FastAPI 提供） | 8501（Streamlit 自带） |
-
-**启动方式**:
-```bash
-# Streamlit 前端（独立运行，不需要 FastAPI）
-streamlit run frontend/streamlit_app.py
-
-# 或使用 pyproject.toml 入口脚本
-rag-ui
-```
-
-**修改的文件（4 个）**:
-
-| 文件 | 变更 |
-|------|------|
-| `frontend/streamlit_app.py` | **新建** — Streamlit 前端主文件（~320 行） |
-| `requirements.txt` | 新增 `streamlit>=1.28.0` |
-| `pyproject.toml` | dependencies 新增 streamlit + scripts 新增 `rag-ui` 入口点 |
-
-**验证结果**:
-- Streamlit 应用启动成功（端口 8501，HTTP 200）
-- 「你好」→ chitchat 意图 → 友好问候回应（不走检索流程），验证通过
-- 侧边栏状态指示正常（Docker 未运行时显示红色 + 提示信息）
-- 所有 Python 模块导入正常
+> 原内容记录了 Streamlit 前端的创建和设计，保留作为历史参考。详见 Git 历史 `frontend/streamlit_app.py`。
 
 ---
 
@@ -1368,29 +1507,21 @@ rag-ui
 
 ---
 
-### 优化 E: Streamlit 上传 Bug 修复 + 20 药品入库 + 侧边栏实时刷新
+### 优化 E: 上传 Bug 修复 + 20 药品入库 + 侧边栏实时刷新
 
 **操作时间**: 2026-06-16
 
-**Bug 1: Streamlit 上传文件后 drug_name 变成临时文件名**
+> ⚠️ 本节中的 Streamlit 相关修复已随步骤 43 弃用。保留核心的数据清理 & 入库记录。
 
-**问题现象**: 通过 Streamlit 上传药品说明书后查询，LLM 回答中出现 `tmpgqf4kzk1`、`tmpzrdssnu0` 等乱码药名。
+**Bug 1: 上传文件后 drug_name 变成临时文件名（Streamlit 已弃用，原理保留）**
+
+**问题现象**: 通过 Web 上传药品说明书后查询，LLM 回答中出现 `tmpgqf4kzk1`、`tmpzrdssnu0` 等乱码药名。
 
 **根因**: `_handle_upload()` 使用 `tempfile.NamedTemporaryFile` 保存上传文件，文件名如 `C:\...\Temp\tmpgqf4kzk1.txt`，`infer_drug_name()` 从文件名推断药名时得到 `tmpgqf4kzk1`。
 
-**修复** (`frontend/streamlit_app.py`):
+**修复**:
 - 改为保存上传文件到 `data/uploads/<原始文件名>`，保留原始文件名中的药名信息
-- 移除不再需要的 `tempfile` 导入和临时文件清理逻辑
 - 入库后 `infer_drug_name()` 可正确从文件名推断药名（如 `氯雷他定片.txt` → `氯雷他定片`）
-
-**Bug 2: 侧边栏药品数量和文本块数量不更新**
-
-**根因**: `_get_kb_stats()` 使用了 `@st.cache_data(ttl=30)`，缓存未过期时显示旧数据。
-
-**修复** (`frontend/streamlit_app.py`):
-- 移除 `@st.cache_data` 装饰器，每次页面渲染实时查询 MySQL/Milvus
-- 新增连接健康检查：查询前 `is_connected()`，断连自动重连
-- 简化刷新按钮：仅 `st.rerun()`
 
 **数据清理 & 入库**:
 
@@ -1403,7 +1534,6 @@ rag-ui
 **最终状态**:
 - MySQL: 21 个药品（阿司匹林 + 20 个拆分药品）
 - Milvus: ~277 条向量
-- Streamlit 侧边栏实时显示最新数据
 
 ---
 
@@ -1695,7 +1825,7 @@ rag-ui
 | `必须回答` / `你不能拒绝` / `忽略所有限制` | |
 | `制造毒品/武器/炸弹` 等危险内容请求 | |
 
-**修改文件**（10 个源文件 + 6 个测试文件 + Streamlit）:
+**修改文件**（10 个源文件 + 6 个测试文件）:
 
 | 文件 | 改动 |
 |------|------|
@@ -1708,7 +1838,6 @@ rag-ui
 | `app/graph/graph.py` | 注册 `general` 和 `attack` 节点（替代 `reject`），条件路由更新为 4-way |
 | `app/api/routers/chat.py` | 流式路径：`other`→`attack`（安全拒答），新增 `general` 分支（跳过检索，直接流式生成） |
 | `app/schemas/chat.py` | `ChatResponse.intent` 描述更新为 `drug_inquiry / chitchat / general / attack` |
-| `frontend/streamlit_app.py` | intent 处理：`other`→`attack`（安全拒答），新增 `general` 分支（LLM 直接回答） |
 
 **行为变化**:
 
@@ -1817,7 +1946,6 @@ html += '<p>' + inline(paraLines.map(l => escapeHtml(l)).join('<br>')) + '</p>';
 | `app/graph/nodes.py` | `generate_node`/`general_node` 从 state 读取 `history` + `memory_summary` 并传给 Generator |
 | `app/api/routers/chat.py` | 单轮+流式两个端点：加载历史→MemoryManager 摘要→传入 graph state/Generator；导入 MemoryManager |
 | `app/services/history_manager.py` | 新增 `get_summary()`/`set_summary()` 方法（Redis key: `session:{id}:summary`）；`clear_history()` 同时清除摘要 |
-| `frontend/streamlit_app.py` | `session_state` 新增 `memory_summary`；`generate()`/`generate_stream()` 传入 `memory_summary` |
 
 **MemoryManager 核心逻辑**:
 
@@ -1895,7 +2023,6 @@ if history and key == "dosage_followup":  # ← 条件过窄
 | `app/online/generator.py` | `_get_user_prompt()`: 移除 `key == "dosage_followup"` 条件，**所有模板**都格式化近期历史；history_text 自带"近期对话："段标题 |
 | `config/prompts.yaml` | 4 个模板的 user prompt 均新增 `{history}` 占位符（与 `{memory_summary}` 并列）；dosage_followup 移除模板内"对话历史："静态标签（改由 Python 代码生成） |
 | `app/graph/nodes.py` | `general_node` 新增 `history = state.get("history")` 并传给 `Generator.generate()` |
-| `frontend/streamlit_app.py` | General 分支 `gen.generate()` 新增 `history=st.session_state.chat_history_llm` |
 
 **验证** (Chrome DevTools 实测):
 
@@ -1942,16 +2069,16 @@ if history and key == "dosage_followup":  # ← 条件过窄
 | 2026-06-15 | 优化 B | 意图分类器放宽策略：prompts.yaml intent system prompt + few-shot 更新，日常问候/闲聊归 drug_inquiry |
 | 2026-06-15 | 优化 C | 新增 chitchat 意图（闲聊分离）：7 文件修改，问候语不触发检索，LangGraph 从 5 节点扩展到 6 节点 + 3-way 条件路由 |
 | 2026-06-15 | 步骤 31 | **模型全面升级**：调研阿里百炼平台最新模型，将项目 4 个模型全部替换为最新版本。详情见下方「步骤 31」 |
-| 2026-06-16 | 步骤 32 | **Streamlit 前端页面**：创建 `frontend/streamlit_app.py`（~320行），全 Python 零 JS，支持文件上传入库 + 流式智能问答。更新 requirements.txt 和 pyproject.toml 添加 streamlit 依赖 |
+| 2026-06-16 | 步骤 32 | ~~**Streamlit 前端页面**~~（⚠️ 已于 2026-07-25 弃用，见步骤 43） |
 | 2026-06-16 | 优化 D | **20 种药品说明书拆分**：创建 `scripts/split_drug_file.py`，将合集按分隔符拆分为 20 个独立 txt 文件，每个以通用名称命名。解决合集入库后 drug_name 无法区分导致检索精度差的问题 |
-| 2026-06-16 | 优化 E | **Streamlit Bug 修复 + 数据清理入库**：修复 `_handle_upload` 用 tempfile 导致 drug_name 变成乱码的 Bug；清理 24 条 temp 脏数据 + 旧合集；20 个拆分文件批量入库（21 药品/277 向量）；修复侧边栏缓存导致统计数据不刷新 |
+| 2026-06-16 | 优化 E | ~~**Streamlit Bug 修复 + 数据清理入库**~~（⚠️ Streamlit 部分已于 2026-07-25 弃用）。清理 24 条 temp 脏数据 + 旧合集；20 个拆分文件批量入库（21 药品/277 向量） |
 | 2026-07-20 | 步骤 33 | **多药品合集文档智能识别与拆分**：新增 multi_drug_splitter.py，重构 pipeline.py 集成智能检测+拆分+聚合，31 个新测试全部通过，单药品行为零回归。|
-| 2026-07-21 | 步骤 34 | **知识库去重更新 + 批次状态持久化**：新增 MySQLClient.drug_exists()/delete_drug_by_name()、MilvusClient.delete_by_drug_name()/collection_name；pipeline 增加 overwrite 参数和去重检查；CLI 增加 --overwrite 标志；API upload 增加 overwrite 参数 + 409 冲突响应；批次状态从内存字典迁移到 MySQL index_records 表；knowledge.py 重构为使用 MySQLClient/MilvusClient 封装；Streamlit 增加药品存在性预检和覆盖确认 UI。235 通过零回归。|
+| 2026-07-21 | 步骤 34 | **知识库去重更新 + 批次状态持久化**：新增 MySQLClient.drug_exists()/delete_drug_by_name()、MilvusClient.delete_by_drug_name()/collection_name；pipeline 增加 overwrite 参数和去重检查；CLI 增加 --overwrite 标志；API upload 增加 overwrite 参数 + 409 冲突响应；批次状态从内存字典迁移到 MySQL index_records 表；knowledge.py 重构为使用 MySQLClient/MilvusClient 封装。235 通过零回归。|
 | 2026-07-21 | 步骤 36 | **前端页面分离 + UI 重设计**：将 index.html 拆分为 chat.html（问答页，GET /）+ manage.html（管理页，GET /manage）。新 "Botanical" 配色方案：青绿 primary + 暖灰背景，去除蓝色调。两页面共享 API Key 注入、fetch 拦截器、Toast 组件。chat.html 全宽居中 800px 极简布局，manage.html 卡片式单列布局。删除旧 index.html，main.py 提取 _serve_html() 复用函数。|
 | 2026-07-21 | 步骤 35 | **API 鉴权与安全**：新增 `app/api/auth.py`（API Key 鉴权依赖，支持 X-API-Key / Bearer 两种方式，常数时间比较防时序攻击）；新增 `app/api/middleware.py`（SecurityHeadersMiddleware 注入 5 个安全响应头 + RateLimitMiddleware 基于 IP 滑动窗口限流）；`config.yaml` 新增 `security` 配置节（auth/rate_limit/headers）；`app/config.py` 新增 APP_API_KEY/auth_enabled/rate_limit_enabled 等属性；`.env`/`.env.example` 新增 APP_API_KEY；`main.py` 注册安全中间件并为 API 路由添加鉴权依赖（health/root/docs 保持公开）；新增 24 个安全测试（鉴权/公共路径豁免/限流/安全头/向后兼容）。259 通过零回归。|
 | 2026-07-21 | Bug 修复 | **嵌入模型不兼容导致检索失败**：步骤 31 将 text-embedding-v3 升级为 v4 后，只改了配置未重新嵌入已有文档。阿司匹林等旧文档仍是 v3 向量（与 v4 余弦相似度仅 0.013），导致查询检索永远匹配不上。修复：清空 Milvus drug_chunks Collection + MySQL 4 张业务表，重建 Collection，用 text-embedding-v4 重新嵌入入库全部 21 个独立药品文件。修复后阿司匹林检索排名从 Top 20 之外升至第 1 名（得分 0.80）。|
 | 2026-07-21 | 优化 F | **Markdown 渲染引擎重写 + 提示词模板优化**：将 chat.html 中 10 行简易 renderMarkdown 重写为完整的逐行块级解析器（~100 行），支持标题(h1-h6)、分隔线、表格（含表头/斑马纹）、无序/有序列表、引用块、行内代码、段落；新增对应 CSS 样式。审查并修复 prompts.yaml 三个 chat 模板的 4 个问题：dosage_followup 缺少"仅使用参考资料"限制，comparison 缺少合规免责声明，三个模板的"参考资料 X"标注与前端来源卡片冗余，无 Markdown 格式指引。|
-| 2026-07-21 | 步骤 37 | **意图分类重构 — 四层防御架构**：将意图分类从 3 类（drug_inquiry/chitchat/other）重构为 4 类（drug_inquiry/chitchat/general/attack）。第1层输入防御（intent.py 新增 12 条 attack 关键词检测 + general 分类），第2层提示词加固（prompts.yaml 新增 general 模板），第3层路由隔离（graph 4-way 路由，general 走 LLM 直接回答无 RAG，attack 走安全拒绝），第4层输出防御（general 附加非专长声明，attack 不透露检测细节）。非药品正常问题（天气/编程/股票等）不再被拒答。10 个源文件 + 6 个测试文件 + Streamlit 全部更新，270 测试通过。|
+| 2026-07-21 | 步骤 37 | **意图分类重构 — 四层防御架构**：将意图分类从 3 类（drug_inquiry/chitchat/other）重构为 4 类（drug_inquiry/chitchat/general/attack）。第1层输入防御（intent.py 新增 12 条 attack 关键词检测 + general 分类），第2层提示词加固（prompts.yaml 新增 general 模板），第3层路由隔离（graph 4-way 路由，general 走 LLM 直接回答无 RAG，attack 走安全拒绝），第4层输出防御（general 附加非专长声明，attack 不透露检测细节）。非药品正常问题（天气/编程/股票等）不再被拒答。10 个源文件 + 6 个测试文件全部更新，270 测试通过。|
 | 2026-07-21 | Bug 修复 | **`<br>` 标签显示为文本**：renderMarkdown 中段落/引用块先 join('<br>') 再 escapeHtml() 导致 `<br>` 被转义为 `&lt;br&gt;`。修复为逐行转义后再 join('<br>')，并新增预处理 `text.replace(/<br\s*\/?>/gi, '\n')` 统一 LLM 可能输出的字面 `<br>` 为换行符。|
 | 2026-07-21 | 步骤 38 | **短期记忆实现 — 对话摘要与上下文最大化**：分析当前系统 4 个缺陷（历史仅 dosage_followup 使用/无摘要/非多轮格式/128K 上下文未利用）。新增 `app/services/memory_manager.py`（~220 行）实现"滑动窗口 + 累积摘要"模式：用 qwen-flash 压缩旧轮次为摘要，保留最近 N 轮完整，摘要存入 Redis `session:{id}:summary`。更新 10 个源文件 + prompts.yaml 所有 4 个模板新增 `{memory_summary}` 占位符。新增 18 个 MemoryManager 测试。288 测试通过。|
 | 2026-07-21 | Bug 修复 | **短期记忆 — 非追问模板无法感知对话历史**：实测发现"我的名字是什么"无法回答。根因：`_get_user_prompt()` 中 `history_text` 仅对 `dosage_followup` 模板格式化（`if key == "dosage_followup"`），导致 default/comparison/general 模板无近期对话上下文。修复：移除条件限制，所有模板统一注入 `{history}` + `{memory_summary}`；`general_node` 补传 `history` 参数。Chrome DevTools 实测：姓名记忆 ✅ + 药品追问 ✅。|
@@ -1965,3 +2092,22 @@ if history and key == "dosage_followup":  # ← 条件过窄
 | 2026-07-22 | Bug 修复 | **`index.html` Markdown 渲染器残缺 — 移植 `chat.html` 完整版**：`index.html`（实际被路由 `/app` 使用）的 `renderMarkdown()` 只有 ~40 行简易版，仅支持 `###`/`##` → h3、`**bold**`、基础表格和列表，缺少：(1) h1/h2/h4/h5/h6 支持（`####` 显示为 raw text）；(2) 分隔线 `---`（`<hr>`）；(3) 引用块 `> `（`<blockquote>`）；(4) 行内代码 `` `code` ``；5) 斜体 `*italic*`；(6) 反斜杠转义预处理（之前只在 `chat.html` 修复过）。**修复**：将 `chat.html` 完整的 ~130 行逐行块级解析器整体移植到 `index.html`，同时补齐对应的 CSS 样式（h1-h6/hr/blockquote/code/thead/tbody）。Chrome DevTools 实测：`####` → h4 ✅, `---` → hr ✅, `> ⚠️` → blockquote（绿左边框）✅。|
 | 2026-07-22 | 步骤 41 | **用户主页 — 昵称设置 + 个人画像查看/编辑**：新增用户主页功能，点击侧边栏头像区域跳转。**后端**：`app/services/user_manager.py` 新增 `update_display_name()`；`app/services/user_profile_manager.py` 新增 `upsert_field()`/`get_valid_fields()`/`update_profile_batch()` 3 个公开方法；`app/api/routers/user.py` 新建 5 个 JWT 端点（GET/PUT settings、GET/PUT profile、DELETE profile field）；`app/api/main.py` 注册 user 路由 + `/profile` 页面路由。**前端**：`frontend/profile.html` 新建自包含页面（双卡片布局：基本信息 + 9 个画像字段，每字段含置信度徽标/保存/删除按钮）；`index.html` 侧边栏改造（头像区可点击 + hover 高亮 + 初始化加载 display_name）；`login.html` 登录/注册存储 `rag_user_id`。**设计要点**：利用已有 `users.display_name` 字段无需迁移；手动编辑默认 confidence=1.0（最高优先级）；空字符串自动触发删除；侧边栏 localStorage 快速路径避免闪烁。Chrome DevTools 实测：设置昵称"小予" → 侧边栏头像变"小"/名变"小予" ✅；年龄字段保存 28/删除 ✅；数据跨页面持久化 ✅。|
 | 2026-07-22 | 步骤 42 | **项目清理与同步**：删除 9 个无关文件（`=2.8.0`/`jindu.txt`/`进程.txt`/`data/uploads/`/`logs/`/`test_screenshots/`/`data/raw/*_test.txt`/`frontend/chat.html`/`tasks/triple_memory_plan.md`）。修复 Dockerfile 缺少 `COPY frontend/`（容器部署时前端页面 404）。`.env.example` 补充 `JWT_SECRET` 变量。README.md 全面同步：架构图四界面、新增用户系统与记忆体系章节、项目结构树补全 8 个新文件、API 表补全认证/会话/用户 15+ 端点、修正过时文件引用。**深度检查额外修复**：`mysql_init.sql` 缺 4 张用户系统表导致 Docker 新部署无法注册登录 → 补全 users/conversations/user_memories/user_profiles；`manage.html` 2 处注释引用已删除的 `chat.html` → 改为 `index.html`；README 新增"升级已有部署"章节。|
+| 2026-07-25 | 步骤 44 | **门禁系统重构 — 四意图分类 → 二元门禁**：产品定位决策——非药品问题全部拦截，打造专业药品问答系统。**核心改动**：`app/online/intent.py` `IntentClassifier`（四分类）→ `Gatekeeper`（二元 drug_related），新增 `is_greeting()` 问候白名单函数；`config/prompts.yaml` `intent` → `gatekeeper`（~100 token 极简 prompt，8 个 few-shot），删除 `chat.general` 模板；`app/graph/nodes.py` 删除 `general_node`/`attack_node`，新增 `reject_node`（统一拦截，零 token）；`app/graph/graph.py` 图简化为 6 节点（-2+1）。**Token 节省**：非药品问题从 ~1300 token → ~100 token（92%↓），药品问题 ~2800 → ~2100 token（25%↓）。376 测试全通过。|
+| 2026-07-25 | 步骤 43 | **弃用 Streamlit 前端**：项目统一使用 FastAPI + 原生 HTML 前端，移除 Streamlit 相关代码和依赖。**删除**：`frontend/streamlit_app.py`。**清理**：`requirements.txt` 移除 `streamlit>=1.28.0`；`pyproject.toml` 移除 `streamlit>=1.28.0` 依赖及 `rag-ui` 脚本入口；`README.md` 移除 Streamlit 启动说明和项目结构条目；`progress.md` 标记步骤 32/优化 E 为弃用，新增本条目。|
+| 2026-07-25 | 步骤 46 | **Phase 1 — 核心流程改造 (v0.5.0 → v1.0.0-Phase1)**：药品问答系统 → 临床病例分析助手。15 个文件改动：prompts.yaml 重写（gatekeeper→clinical_related + case_extraction + 5 SOAP 模板）、intent/generator 重写、graph 扩展为 8 节点（+case_preprocess + synthesize）、API 改为 multipart/form-data、前端支持文件上传+SOAP 渲染。72 核心测试全部通过。|
+| 2026-07-25 | Bug 修复 | **`_split_by_chars()` 死循环导致 OOM → PyCharm 崩溃**：`splitter_disease.py` 处理文本末尾时 `start = end - chunk_overlap` 不前进，无限创建 Chunk 对象耗尽内存。新增 2 层防护（`end >= len(text)` break + `start <= prev_start` 兜底）。407 全量测试全部通过。|
+| 2026-07-25 | 步骤 47 | **Phase 2.7-2.9 — 三种新切分器**：创建 `splitter_disease.py`（疾病/288行）、`splitter_guideline.py`（指南/207行）、`splitter_literature.py`（文献/267行），各含专用章节检测模式。3 个切分器共用 `_split_by_chars()` 辅助函数。17 个测试全通过。|
+| 2026-07-25 | 步骤 48 | **Phase 2.3-2.6 — 数据库层扩展**：创建 `migration_v3.sql`（6 张新表 DDL + index_records 扩展）；`milvus_client.py` 支持多 collection（统一 schema 含 source_name/source_type/extra_field_1/extra_field_2）+ 向后兼容旧 drug_chunks；`mysql_client.py` 新增通用 CRUD 方法（generic 系列）；`init_milvus.py`/`init_collection.py` 支持 4 collection + 9 表。|
+| 2026-07-25 | 步骤 49 | **Phase 2.10-2.16 — Pipeline + 检索 + 前端 + CLI 多源扩展**：pipeline.py source_type 路由（4 种切分器 → 4 种表/collection）；retriever.py 新增 `retrieve_from` + `multi_source_retrieve`（4 collection 并行 + 跨源 RRF + 均衡采样）；nodes.py `multi_retrieve_node` 切换到真正多源；manage.html 多源 Tab + source_type 下拉 + 徽标；run_offline.py --source-type 参数。407 测试全通过。|
+| 2026-07-26 | 步骤 50 | **Phase 2 完成度验证 + Bug 修复**：逐一核对 Phase 2 全部 16 个子步骤（2.1-2.16）——MySQL 6 张新表 + Milvus 4 Collection 统一 schema + 3 种新切分器 + Pipeline source_type 路由 + 多源并行检索 + CLI/前端适配，全部完成。发现并修复 3 个 Bug：(1) `config.py` 5 个 multi_source 属性路径从 `database.milvus.multi_source.xxx` 修正为 `database.multi_source.xxx`（原路径指向不存在节点，配置从未生效）；(2) `nodes.py` `multi_retrieve_node` 硬编码 `top_n_per_source=3, final_top_n=10` 改为读取 `config.multi_source_top_n_per_source/final_top_n`；(3) `mysql_client.py` 移除 `bm25_search` 和 `bm25_search_generic` 中声明但未使用的 `query_escaped` 死代码。README.md 同步更新（测试数 407 + 项目结构补全 9 个新文件 + API 表补全 + 离线流程多源化）。407 测试全通过，零回归。|
+
+---
+
+## 📌 项目状态
+
+| Phase | 内容 | 状态 |
+|-------|------|:--:|
+| Phase 1 | 核心流程改造（8 节点 graph + 文件上传 + SOAP 模板） | ✅ |
+| Phase 2 | 多源知识库（4 Collection + 4 切分器 + 多路检索） | ✅ |
+| Phase 3 | 记忆体系重构（患者→医生维度） | ❌ 待实施 |
+| Phase 4 | 前端完善 + 全量测试 + 文档 | ❌ 待实施 |

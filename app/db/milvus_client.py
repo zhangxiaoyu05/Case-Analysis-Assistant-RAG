@@ -4,6 +4,8 @@ Milvus 向量数据库连接模块
 封装 pymilvus 的连接管理和常用 CRUD 操作，
 供离线入库流程和在线检索流程共用。
 
+v1.0.0: 支持多 collection（drug/disease/guideline/literature）。
+
 使用 MilvusClient (pymilvus 3.x 推荐 API)。
 """
 
@@ -33,10 +35,18 @@ class MilvusClient:
             results = client.search(query_vector, top_k=10)
     """
 
-    def __init__(self) -> None:
+    # v1.0.0: 4 个 collection 名称
+    COLLECTION_NAMES = [
+        "drug_chunks",
+        "disease_chunks",
+        "guideline_chunks",
+        "literature_chunks",
+    ]
+
+    def __init__(self, collection_name: Optional[str] = None) -> None:
         self._client: Optional[_MilvusClient] = None
         self._uri = f"http://{config.MILVUS_HOST}:{config.MILVUS_PORT}"
-        self._collection_name = config.milvus_collection_name
+        self._collection_name = collection_name or config.milvus_collection_name
         self._dimension = config.milvus_dimension
         self._metric_type = config.milvus_metric_type
         self._index_type = config.milvus_index_type
@@ -85,16 +95,19 @@ class MilvusClient:
 
     def create_collection(self, drop_if_exists: bool = False) -> None:
         """
-        创建 drug_chunks Collection
+        创建 Collection（v1.0.0 统一 schema）。
 
         Schema 字段:
         - id: 主键 (INT64, auto_id)
         - doc_id: 原始文档 ID (INT64)
         - chunk_index: 块序号 (INT64)
-        - drug_name: 药品名称 (VARCHAR 200)
-        - section: 章节名 (VARCHAR 50)
+        - source_name: 来源名称 (VARCHAR 200) — 药品名/疾病名/指南标题/文献标题
+        - source_type: 来源类型 (VARCHAR 50) — drug/disease/guideline/literature
+        - section: 章节名 (VARCHAR 100)
         - chunk_text: 文本内容 (VARCHAR 5000)
-        - embedding: 向量 (FLOAT_VECTOR, 1536维)
+        - extra_field_1: 额外字段1 (VARCHAR 100) — evidence_level
+        - extra_field_2: 额外字段2 (VARCHAR 100) — recommendation_grade / study_type / publish_year
+        - embedding: 向量 (FLOAT_VECTOR)
         """
         if self.collection_exists():
             if drop_if_exists:
@@ -104,7 +117,7 @@ class MilvusClient:
                 logger.info(f"Collection 已存在，跳过创建: {self._collection_name}")
                 return
 
-        # 定义 Schema
+        # 定义统一 Schema
         schema = CollectionSchema(
             fields=[
                 FieldSchema(
@@ -122,14 +135,19 @@ class MilvusClient:
                     dtype=DataType.INT64,
                 ),
                 FieldSchema(
-                    name="drug_name",
+                    name="source_name",
                     dtype=DataType.VARCHAR,
                     max_length=200,
                 ),
                 FieldSchema(
-                    name="section",
+                    name="source_type",
                     dtype=DataType.VARCHAR,
                     max_length=50,
+                ),
+                FieldSchema(
+                    name="section",
+                    dtype=DataType.VARCHAR,
+                    max_length=100,
                 ),
                 FieldSchema(
                     name="chunk_text",
@@ -137,12 +155,22 @@ class MilvusClient:
                     max_length=5000,
                 ),
                 FieldSchema(
+                    name="extra_field_1",
+                    dtype=DataType.VARCHAR,
+                    max_length=100,
+                ),
+                FieldSchema(
+                    name="extra_field_2",
+                    dtype=DataType.VARCHAR,
+                    max_length=100,
+                ),
+                FieldSchema(
                     name="embedding",
                     dtype=DataType.FLOAT_VECTOR,
                     dim=self._dimension,
                 ),
             ],
-            description="药品说明书切分文本块向量库",
+            description=f"v1.0.0 统一 schema — {self._collection_name}",
         )
 
         # 准备索引参数
@@ -208,12 +236,13 @@ class MilvusClient:
         metadata_list: list[dict],
     ) -> dict:
         """
-        批量插入向量和元数据
+        批量插入向量和元数据（v1.0.0 统一 schema）。
 
         Args:
-            vectors: 向量列表，每个向量是 1536 维 float 列表
+            vectors: 向量列表，每个向量是 dim 维 float 列表
             metadata_list: 元数据列表，每个 dict 需包含：
-                doc_id, chunk_index, drug_name, section, chunk_text
+                doc_id, chunk_index, source_name, source_type, section, chunk_text
+                可选: extra_field_1, extra_field_2
 
         Returns:
             pymilvus 插入结果字典 (含 insert_count, ids)
@@ -223,15 +252,18 @@ class MilvusClient:
                 f"向量数量 ({len(vectors)}) 与元数据数量 ({len(metadata_list)}) 不匹配"
             )
 
-        # 组装数据
+        # v1.0.0: 使用统一字段名
         data = []
         for vec, meta in zip(vectors, metadata_list):
             data.append({
                 "doc_id": meta["doc_id"],
                 "chunk_index": meta["chunk_index"],
-                "drug_name": meta.get("drug_name", ""),
+                "source_name": meta.get("source_name", meta.get("drug_name", "")),
+                "source_type": meta.get("source_type", "drug"),
                 "section": meta.get("section", ""),
                 "chunk_text": meta.get("chunk_text", ""),
+                "extra_field_1": str(meta.get("extra_field_1", meta.get("evidence_level", "")))[:100],
+                "extra_field_2": str(meta.get("extra_field_2", ""))[:100],
                 "embedding": vec,
             })
 
@@ -267,7 +299,8 @@ class MilvusClient:
             top_k = config.retrieval_vector_top_k
 
         if output_fields is None:
-            output_fields = ["doc_id", "drug_name", "section", "chunk_text", "chunk_index"]
+            output_fields = ["doc_id", "source_name", "source_type", "section",
+                           "chunk_text", "chunk_index", "extra_field_1", "extra_field_2"]
 
         search_params = {
             "metric_type": self._metric_type,
@@ -306,7 +339,8 @@ class MilvusClient:
             匹配的记录列表
         """
         if output_fields is None:
-            output_fields = ["id", "doc_id", "drug_name", "section", "chunk_text"]
+            output_fields = ["id", "doc_id", "source_name", "source_type", "section",
+                           "chunk_text", "extra_field_1", "extra_field_2"]
 
         return self.client.query(
             collection_name=self._collection_name,
@@ -325,21 +359,21 @@ class MilvusClient:
         """公开 Collection 名称（供外部使用，如 Milvus delete_by_filter）"""
         return self._collection_name
 
-    def delete_by_drug_name(self, drug_name: str) -> dict:
+    def delete_by_source_name(self, source_name: str) -> dict:
         """
-        按药品名称删除 Milvus 中的向量。
+        按来源名称删除 Milvus 中的向量（v1.0.0 统一方法）。
 
         Args:
-            drug_name: 药品名称
+            source_name: 来源名称（药品名/疾病名/指南标题/文献标题）
 
         Returns:
             pymilvus delete 结果字典
         """
         if not self.collection_exists():
-            logger.warning(f"Collection 不存在，跳过 Milvus 删除: {drug_name}")
+            logger.warning(f"Collection 不存在，跳过 Milvus 删除: {source_name}")
             return {"delete_count": 0}
 
-        filter_expr = f'drug_name == "{drug_name}"'
+        filter_expr = f'source_name == "{source_name}"'
         logger.info(f"Milvus 删除向量: filter={filter_expr}")
         result = self.client.delete(
             collection_name=self._collection_name,
@@ -347,3 +381,10 @@ class MilvusClient:
         )
         logger.info(f"Milvus 删除完成: {result}")
         return result
+
+    def delete_by_drug_name(self, drug_name: str) -> dict:
+        """
+        按药品名称删除 Milvus 中的向量（向后兼容别名）。
+        v1.0.0: 内部调用 delete_by_source_name。
+        """
+        return self.delete_by_source_name(drug_name)

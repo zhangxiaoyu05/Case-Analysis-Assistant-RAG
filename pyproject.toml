@@ -4,8 +4,8 @@ build-backend = "hatchling.build"
 
 [project]
 name = "rag-pharma"
-version = "0.1.0"
-description = "RAG 药品说明书智能问答系统"
+version = "1.0.0"
+description = "RAG 临床病例分析助手 — SOAP 格式 + 循证引用"
 readme = "README.md"
 license = { text = "MIT" }
 authors = [
@@ -44,7 +44,6 @@ dependencies = [
     "pydantic>=2.5.0",
     "pydantic-settings>=2.1.0",
     "loguru>=0.7.0",
-    "streamlit>=1.28.0",
     "pyjwt>=2.8.0",
 ]
 
@@ -65,7 +64,6 @@ dev = [
 
 [project.scripts]
 rag-api = "app.api.main:main"
-rag-ui = "frontend.streamlit_app:main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["app"]

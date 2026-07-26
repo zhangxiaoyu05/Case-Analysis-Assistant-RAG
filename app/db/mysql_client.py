@@ -4,12 +4,43 @@ MySQL 数据库连接模块
 封装 pymysql 连接池和业务表 CRUD 操作，
 供离线入库流程和在线检索流程共用。
 
+v1.0.0: 新增 6 张表通用操作方法 + 多源 BM25 检索。
+
 表结构参见 scripts/mysql_init.sql:
-- drug_raw_docs: 原始药品说明书全文
-- drug_chunks: 切分后的文本块（含 BM25 全文索引）
+- drug_raw_docs / drug_chunks: 药品说明书
+- disease_raw_docs / disease_chunks: 疾病知识
+- guideline_raw_docs / guideline_chunks: 临床指南
+- literature_raw_docs / literature_chunks: 学术文献
 - drug_metadata: 药品结构化元数据
 - index_records: 索引批次记录
 """
+
+# v1.0.0: 表名到 source_type 的映射
+_TABLE_SOURCE_TYPE_MAP = {
+    "drug_raw_docs": "drug",
+    "drug_chunks": "drug",
+    "disease_raw_docs": "disease",
+    "disease_chunks": "disease",
+    "guideline_raw_docs": "guideline",
+    "guideline_chunks": "guideline",
+    "literature_raw_docs": "literature",
+    "literature_chunks": "literature",
+}
+
+# v1.0.0: 每个 source_type 的 chunks 表 + raw_docs 表
+_SOURCE_CHUNKS_TABLE = {
+    "drug": "drug_chunks",
+    "disease": "disease_chunks",
+    "guideline": "guideline_chunks",
+    "literature": "literature_chunks",
+}
+
+_SOURCE_RAW_TABLE = {
+    "drug": "drug_raw_docs",
+    "disease": "disease_raw_docs",
+    "guideline": "guideline_raw_docs",
+    "literature": "literature_raw_docs",
+}
 
 from contextlib import contextmanager
 from datetime import datetime
@@ -324,7 +355,6 @@ class MySQLClient:
 
         # 对查询进行简单处理，适配 ngram 全文搜索
         # BOOLEAN MODE 支持 +must -not 等操作符
-        query_escaped = pymysql.converters.escape_string(query)
 
         if drug_name:
             sql = f"""
@@ -353,6 +383,224 @@ class MySQLClient:
             with self.conn.cursor() as cursor:
                 cursor.execute(sql, (query, query, top_k))
                 return cursor.fetchall()
+
+    # ============================================================
+    # v1.0.0: 通用多源操作方法
+    # ============================================================
+    def insert_raw_doc_generic(
+        self,
+        source_type: str,
+        fields: dict,
+    ) -> int:
+        """
+        通用原始文档插入，根据 source_type 路由到对应表。
+
+        Args:
+            source_type: "drug" / "disease" / "guideline" / "literature"
+            fields: 字段名→值的映射（不含 id 和 created_at）
+
+        Returns:
+            新插入记录的 doc_id
+        """
+        table = _SOURCE_RAW_TABLE.get(source_type)
+        if not table:
+            raise ValueError(f"未知的 source_type: {source_type}")
+
+        columns = ", ".join(fields.keys())
+        placeholders = ", ".join(["%s"] * len(fields))
+        values = list(fields.values())
+
+        sql = f"INSERT INTO {table} ({columns}) VALUES ({placeholders})"
+        with self.conn.cursor() as cursor:
+            cursor.execute(sql, values)
+            self.conn.commit()
+            doc_id = cursor.lastrowid
+            logger.info(f"通用插入: {table}, doc_id={doc_id}, source_type={source_type}")
+            return doc_id
+
+    def insert_chunks_batch_generic(
+        self,
+        source_type: str,
+        chunk_records: list[dict],
+    ) -> int:
+        """
+        通用文本块批量插入，根据 source_type 路由到对应 chunks 表。
+
+        Args:
+            source_type: "drug" / "disease" / "guideline" / "literature"
+            chunk_records: dict 列表，每个 dict 包含该 chunks 表需要的字段
+
+        Returns:
+            插入的行数
+        """
+        table = _SOURCE_CHUNKS_TABLE.get(source_type)
+        if not table:
+            raise ValueError(f"未知的 source_type: {source_type}")
+
+        if not chunk_records:
+            return 0
+
+        # 补充 char_count
+        for c in chunk_records:
+            c.setdefault("char_count", len(c.get("chunk_text", "")))
+
+        columns = list(chunk_records[0].keys())
+        col_str = ", ".join(columns)
+        placeholder_str = ", ".join([f"%({col})s" for col in columns])
+
+        sql = f"INSERT INTO {table} ({col_str}) VALUES ({placeholder_str})"
+        with self.conn.cursor() as cursor:
+            cursor.executemany(sql, chunk_records)
+            self.conn.commit()
+            count = cursor.rowcount
+            logger.info(f"通用批量插入: {count} 条 → {table}")
+            return count
+
+    def bm25_search_generic(
+        self,
+        source_type: str,
+        query: str,
+        top_k: int = 20,
+        filter_field: Optional[str] = None,
+        filter_value: Optional[str] = None,
+    ) -> list[dict]:
+        """
+        通用 BM25 检索，根据 source_type 路由到对应 chunks 表。
+
+        Args:
+            source_type: "drug" / "disease" / "guideline" / "literature"
+            query: 搜索查询文本
+            top_k: 返回 Top-K
+            filter_field: 可选，按字段过滤的字段名
+            filter_value: 可选，过滤字段的值
+
+        Returns:
+            [{id, doc_id, ..., chunk_text, bm25_score}]
+        """
+        table = _SOURCE_CHUNKS_TABLE.get(source_type)
+        if not table:
+            raise ValueError(f"未知的 source_type: {source_type}")
+
+        if filter_field and filter_value:
+            sql = f"""
+                SELECT *, MATCH(chunk_text) AGAINST(%s IN BOOLEAN MODE) AS bm25_score
+                FROM {table}
+                WHERE MATCH(chunk_text) AGAINST(%s IN BOOLEAN MODE)
+                  AND {filter_field} = %s
+                ORDER BY bm25_score DESC
+                LIMIT %s
+            """
+            with self.conn.cursor() as cursor:
+                cursor.execute(sql, (query, query, filter_value, top_k))
+                return cursor.fetchall()
+        else:
+            sql = f"""
+                SELECT *, MATCH(chunk_text) AGAINST(%s IN BOOLEAN MODE) AS bm25_score
+                FROM {table}
+                WHERE MATCH(chunk_text) AGAINST(%s IN BOOLEAN MODE)
+                ORDER BY bm25_score DESC
+                LIMIT %s
+            """
+            with self.conn.cursor() as cursor:
+                cursor.execute(sql, (query, query, top_k))
+                return cursor.fetchall()
+
+    def delete_by_id_generic(
+        self,
+        source_type: str,
+        doc_id: int,
+    ) -> bool:
+        """
+        通用按 ID 级联删除（raw_docs + chunks）。
+
+        Args:
+            source_type: "drug" / "disease" / "guideline" / "literature"
+            doc_id: 原始文档 ID
+
+        Returns:
+            是否成功删除
+        """
+        raw_table = _SOURCE_RAW_TABLE.get(source_type)
+        chunks_table = _SOURCE_CHUNKS_TABLE.get(source_type)
+        if not raw_table or not chunks_table:
+            raise ValueError(f"未知的 source_type: {source_type}")
+
+        # chunks 有 CASCADE 外键，但显式删除更安全
+        sql_chunks = f"DELETE FROM {chunks_table} WHERE doc_id = %s"
+        with self.conn.cursor() as cursor:
+            cursor.execute(sql_chunks, (doc_id,))
+
+        sql_raw = f"DELETE FROM {raw_table} WHERE id = %s"
+        with self.conn.cursor() as cursor:
+            cursor.execute(sql_raw, (doc_id,))
+
+        self.conn.commit()
+        logger.info(f"通用删除: {source_type} doc_id={doc_id}")
+        return True
+
+    def list_source_docs(
+        self,
+        source_type: str,
+        limit: int = 100,
+    ) -> list[dict]:
+        """
+        列出指定 source_type 已入库的文档摘要。
+
+        Args:
+            source_type: "drug" / "disease" / "guideline" / "literature"
+            limit: 最大返回数
+
+        Returns:
+            文档摘要列表
+        """
+        raw_table = _SOURCE_RAW_TABLE.get(source_type)
+        chunks_table = _SOURCE_CHUNKS_TABLE.get(source_type)
+        if not raw_table:
+            return []
+
+        # 根据 source_type 选择显示标题的列
+        title_col = {
+            "drug": "drug_name",
+            "disease": "disease_name",
+            "guideline": "guideline_title",
+            "literature": "title",
+        }.get(source_type, "id")
+
+        sql = f"""
+            SELECT r.id, r.{title_col} AS title,
+                   (SELECT COUNT(*) FROM {chunks_table} WHERE doc_id = r.id) AS chunk_count,
+                   r.created_at
+            FROM {raw_table} r
+            ORDER BY r.id DESC
+            LIMIT %s
+        """
+        with self.conn.cursor() as cursor:
+            cursor.execute(sql, (limit,))
+            return cursor.fetchall()
+
+    def get_source_counts(self) -> dict:
+        """获取各 source_type 的入库数量统计。"""
+        counts = {}
+        for source_type in ["drug", "disease", "guideline", "literature"]:
+            raw_table = _SOURCE_RAW_TABLE.get(source_type)
+            if raw_table and self.table_exists(raw_table):
+                with self.conn.cursor() as cursor:
+                    cursor.execute(f"SELECT COUNT(*) AS cnt FROM {raw_table}")
+                    result = cursor.fetchone()
+                    counts[source_type] = result["cnt"] if result else 0
+            else:
+                counts[source_type] = 0
+        return counts
+
+    @classmethod
+    def get_source_chunks_table(cls, source_type: str) -> str:
+        """根据 source_type 返回对应的 chunks 表名（类方法，无需实例化）。"""
+        return _SOURCE_CHUNKS_TABLE.get(source_type, "drug_chunks")
+
+    @classmethod
+    def get_source_raw_table(cls, source_type: str) -> str:
+        """根据 source_type 返回对应的 raw_docs 表名（类方法，无需实例化）。"""
+        return _SOURCE_RAW_TABLE.get(source_type, "drug_raw_docs")
 
     # ============================================================
     # drug_metadata — 药品元数据操作
@@ -501,12 +749,19 @@ class MySQLClient:
             return result["cnt"] > 0 if result else False
 
     def get_table_stats(self) -> dict:
-        """获取所有业务表的行数汇总"""
+        """获取所有业务表的行数汇总（含 v1.0.0 新增表）"""
         tables = [
             self._raw_docs_table,
             self._chunks_table,
             self._metadata_table,
             self._index_records_table,
+            # v1.0.0 新增
+            "disease_raw_docs",
+            "disease_chunks",
+            "guideline_raw_docs",
+            "guideline_chunks",
+            "literature_raw_docs",
+            "literature_chunks",
         ]
         stats = {}
         for table in tables:
@@ -520,7 +775,11 @@ class MySQLClient:
         return stats
 
     def is_ready(self) -> bool:
-        """检查 MySQL 是否就绪（4 张业务表都存在）"""
+        """检查 MySQL 核心表是否就绪（至少 drug 4 张表存在）。
+
+        v1.0.0: 不要求新增的 disease/guideline/literature 表必须存在，
+        只检查核心的 drug 4 张表。其他表按需检查。
+        """
         expected_tables = [
             self._raw_docs_table,
             self._chunks_table,
@@ -528,3 +787,19 @@ class MySQLClient:
             self._index_records_table,
         ]
         return all(self.table_exists(t) for t in expected_tables)
+
+    def is_v1_ready(self) -> bool:
+        """检查所有 v1.0.0 表是否就绪（含 6 张新表）。"""
+        all_tables = [
+            self._raw_docs_table,
+            self._chunks_table,
+            self._metadata_table,
+            self._index_records_table,
+            "disease_raw_docs",
+            "disease_chunks",
+            "guideline_raw_docs",
+            "guideline_chunks",
+            "literature_raw_docs",
+            "literature_chunks",
+        ]
+        return all(self.table_exists(t) for t in all_tables)

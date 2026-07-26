@@ -1,15 +1,25 @@
 #!/usr/bin/env python
 """
-离线处理 CLI 入口
+离线处理 CLI 入口 (v1.0.0)
 
-对药品说明书文档执行完整的离线处理流程：
+对文档执行完整的离线处理流程：
 加载 → 清洗 → 切分 → 向量化 → MySQL + Milvus 入库。
+
+v1.0.0: 支持多源文档（drug/disease/guideline/literature）。
 
 使用方式:
     python scripts/run_offline.py --file data/raw/阿司匹林说明书.pdf
     python scripts/run_offline.py --file doc.pdf --drug-name "阿司匹林" --desensitize
     python scripts/run_offline.py --dir data/raw/ --dry-run
     python scripts/run_offline.py --file doc.pdf --batch-id my-batch-001
+
+    # v1.0.0: 多源入库
+    python scripts/run_offline.py --file guideline.pdf --source-type guideline \
+        --guideline-title "中国心力衰竭诊疗指南2024" --publish-year 2024
+    python scripts/run_offline.py --file disease.txt --source-type disease \
+        --disease-name "2型糖尿病"
+    python scripts/run_offline.py --file paper.pdf --source-type literature \
+        --title "RCT of SGLT2i in HF" --study-type rct
 """
 
 import argparse
@@ -30,9 +40,17 @@ from app.offline import (
     run_pipeline_batch,
     split_document,
 )
+# v1.0.0: 新切分器
+from app.offline.splitter_disease import split_disease_document
+from app.offline.splitter_guideline import split_guideline_document
+from app.offline.splitter_literature import split_literature_document
 
 
-def cmd_dry_run(file_path: Path, desensitize: bool = False) -> None:
+def cmd_dry_run(
+    file_path: Path,
+    desensitize: bool = False,
+    source_type: str = "drug",
+) -> None:
     """
     干跑模式：只执行加载 → 清洗 → 切分，不写入数据库。
     用于验证文档处理结果。
@@ -45,15 +63,22 @@ def cmd_dry_run(file_path: Path, desensitize: bool = False) -> None:
     doc = load_document(file_path)
     logger.info(f"\n📄 文档: {doc.source_file}")
     logger.info(f"   格式: {doc.file_type}")
-    logger.info(f"   推断药名: {doc.inferred_drug_name}")
+    logger.info(f"   推断名称: {doc.inferred_drug_name}")
     logger.info(f"   原文长度: {len(doc.raw_text)} 字符")
 
     # 2. 清洗
     cleaned = clean_text(doc.raw_text, desensitize=desensitize)
     logger.info(f"   清洗后: {len(cleaned)} 字符")
 
-    # 3. 切分
-    chunks: list[Chunk] = split_document(cleaned)
+    # 3. 切分（按 source_type 选择切分器）
+    if source_type == "disease":
+        chunks: list[Chunk] = split_disease_document(cleaned)
+    elif source_type == "guideline":
+        chunks: list[Chunk] = split_guideline_document(cleaned)
+    elif source_type == "literature":
+        chunks: list[Chunk] = split_literature_document(cleaned)
+    else:
+        chunks: list[Chunk] = split_document(cleaned)
     logger.info(f"   切分结果: {len(chunks)} 个 chunk")
 
     # 打印 chunks 预览
@@ -85,6 +110,8 @@ def cmd_process_file(
     desensitize: bool = False,
     overwrite: bool = False,
     batch_id: str | None = None,
+    source_type: str = "drug",
+    **extra_fields,
 ) -> None:
     """处理单个文件"""
     result = run_pipeline(
@@ -95,6 +122,8 @@ def cmd_process_file(
         desensitize=desensitize,
         overwrite=overwrite,
         batch_id=batch_id,
+        source_type=source_type,
+        **extra_fields,
     )
 
     # 打印结果
@@ -129,8 +158,10 @@ def cmd_process_dir(
     category: str | None = None,
     desensitize: bool = False,
     overwrite: bool = False,
+    source_type: str = "drug",
+    **extra_fields,
 ) -> None:
-    """处理目录中所有文档"""
+    """处理目录中所有文档（v1.0.0: 支持多 source_type）"""
     results = run_pipeline_batch(
         file_paths=sorted(dir_path.glob("*")),
         drug_name=drug_name,
@@ -138,6 +169,8 @@ def cmd_process_dir(
         drug_category=category,
         desensitize=desensitize,
         overwrite=overwrite,
+        source_type=source_type,
+        **extra_fields,
     )
 
     # 汇总
@@ -217,6 +250,56 @@ def main() -> None:
         action="store_true",
         help="干跑模式：只做加载/清洗/切分，不入库",
     )
+    # v1.0.0: 多源支持参数
+    parser.add_argument(
+        "--source-type",
+        type=str,
+        default="drug",
+        choices=["drug", "disease", "guideline", "literature"],
+        help="文档来源类型（默认 drug）",
+    )
+    parser.add_argument(
+        "--disease-name",
+        type=str,
+        default=None,
+        help="疾病名称（source-type=disease 时使用）",
+    )
+    parser.add_argument(
+        "--guideline-title",
+        type=str,
+        default=None,
+        help="指南标题（source-type=guideline 时使用）",
+    )
+    parser.add_argument(
+        "--publish-year",
+        type=int,
+        default=None,
+        help="发布年份（source-type=guideline/literature 时使用）",
+    )
+    parser.add_argument(
+        "--issuing-body",
+        type=str,
+        default=None,
+        help="发布机构（source-type=guideline 时使用）",
+    )
+    parser.add_argument(
+        "--study-type",
+        type=str,
+        default=None,
+        help="研究类型（source-type=literature 时使用，如 RCT/meta-analysis/cohort）",
+    )
+    parser.add_argument(
+        "--evidence-level",
+        type=str,
+        default=None,
+        help="证据级别（如 IA/IB/IIA/IIB/1a/1b/2a 等）",
+    )
+    parser.add_argument(
+        "--doi",
+        type=str,
+        default=None,
+        help="DOI（source-type=literature 时使用）",
+    )
 
     args = parser.parse_args()
 
@@ -228,18 +311,60 @@ def main() -> None:
     logger.info(f"Redis: {config.REDIS_HOST}:{config.REDIS_PORT}")
     logger.info(f"Embedding: {config.embedding_model} ({config.embedding_dimension}d)")
 
+    # v1.0.0: 构建 extra_fields
+    extra_fields = {}
+    source_type = args.source_type
+    if source_type == "disease":
+        if args.disease_name:
+            extra_fields["disease_name"] = args.disease_name
+        if args.evidence_level:
+            extra_fields["evidence_level"] = args.evidence_level
+    elif source_type == "guideline":
+        if args.guideline_title:
+            extra_fields["guideline_title"] = args.guideline_title
+        if args.disease_name:
+            extra_fields["disease_name"] = args.disease_name
+        if args.publish_year:
+            extra_fields["publish_year"] = args.publish_year
+        if args.issuing_body:
+            extra_fields["issuing_body"] = args.issuing_body
+        if args.evidence_level:
+            extra_fields["evidence_level"] = args.evidence_level
+    elif source_type == "literature":
+        if args.drug_name:
+            extra_fields["title"] = args.drug_name  # drug_name 字段复用为 title
+        if args.disease_name:
+            extra_fields["disease_name"] = args.disease_name
+        if args.study_type:
+            extra_fields["study_type"] = args.study_type
+        if args.publish_year:
+            extra_fields["publish_year"] = args.publish_year
+        if args.evidence_level:
+            extra_fields["evidence_level"] = args.evidence_level
+        if args.doi:
+            extra_fields["doi"] = args.doi
+
+    # Resolve name: drug_name is the primary name, but for non-drug types use specific fields
+    resolved_name = args.drug_name
+    if not resolved_name and source_type == "disease":
+        resolved_name = args.disease_name
+    elif not resolved_name and source_type == "guideline":
+        resolved_name = args.guideline_title
+
     if args.file:
         if args.dry_run:
-            cmd_dry_run(args.file, desensitize=args.desensitize)
+            cmd_dry_run(args.file, desensitize=args.desensitize, source_type=source_type)
         else:
             cmd_process_file(
                 file_path=args.file,
-                drug_name=args.drug_name,
+                drug_name=resolved_name,
                 manufacturer=args.manufacturer,
                 category=args.category,
                 desensitize=args.desensitize,
                 overwrite=args.overwrite,
                 batch_id=args.batch_id,
+                source_type=source_type,
+                **extra_fields,
             )
     elif args.dir:
         if args.dry_run:
@@ -253,6 +378,8 @@ def main() -> None:
                 category=args.category,
                 desensitize=args.desensitize,
                 overwrite=args.overwrite,
+                source_type=source_type,
+                **extra_fields,
             )
 
 

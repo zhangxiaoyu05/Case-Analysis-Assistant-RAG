@@ -1,10 +1,9 @@
 """
-RAG 药品问答系统 - FastAPI 入口
+RAG 临床病例分析助手 - FastAPI 入口
 
-提供 HTTP 问答接口，对外暴露 /api/v1/chat 等端点。
+v1.0.0: 从药品问答改造为病例分析助手。
+提供 HTTP 问答接口，对外暴露 /api/v1/chat 等端点（支持病例文件上传）。
 使用 lifespan 管理 LangGraph 图编译和 Redis 连接生命周期。
-
-Phase 0: 新增用户系统（登录/注册）+ 多会话管理（左侧边栏 + 对话区）。
 """
 
 import asyncio
@@ -40,7 +39,7 @@ async def lifespan(app: FastAPI):
     - shutdown: 清理 Redis 连接 + 取消定时任务
     """
     logger.info("=" * 50)
-    logger.info("RAG 药品问答系统启动中...")
+    logger.info("RAG 临床病例分析助手启动中...")
     logger.info("=" * 50)
 
     # --- Startup ---
@@ -74,9 +73,9 @@ async def lifespan(app: FastAPI):
 # FastAPI 应用
 # ============================================================
 app = FastAPI(
-    title="RAG 药品问答系统 API",
-    description="基于 LangGraph + Milvus 的药品说明书智能问答服务",
-    version="0.4.0",
+    title="RAG 临床病例分析助手 API",
+    description="基于 LangGraph + Milvus 的临床病例智能分析服务 — SOAP 格式 + 循证引用",
+    version="1.0.0",
     lifespan=lifespan,
 )
 

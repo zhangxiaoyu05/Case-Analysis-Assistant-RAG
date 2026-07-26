@@ -1,5 +1,6 @@
 # ============================================================
-# RAG 药品问答系统 - 主配置文件
+# RAG 临床病例分析助手 - 主配置文件
+# v1.0.0: 从药品问答改造为病例分析
 # 所有业务参数、模型选择、数据库配置均集中在此文件
 # 注意：API Key 等敏感信息不要写在这里，写在 .env 中
 # ============================================================
@@ -20,12 +21,19 @@ models:
     dimension: 1024          # Milvus 建索引维度（text-embedding-v4 支持 64/128/256/512/768/1024/1536/2048）
     batch_size: 10           # 每批嵌入的文本块数量（DashScope API 限制 ≤10）
 
-  # 意图识别模型（判断用户问题是否在药品知识范围内）
+  # 门禁模型（二元判断：临床医学相关 / 非临床医学）
   intent:
     provider: "dashscope"
-    model: "qwen-flash"      # 可选: qwen-flash / qwen3-max / qwen-plus / qwen-turbo
+    model: "qwen-flash"      # 轻量模型做二元门禁，可选: qwen-flash / qwen-plus / qwen-turbo
     temperature: 0.1
     max_tokens: 200
+
+  # 病例结构化提取模型
+  case_extraction:
+    provider: "dashscope"
+    model: "qwen-flash"      # 轻量模型做结构化提取
+    temperature: 0.1
+    max_tokens: 800
 
   # 问答生成模型
   chat:
@@ -63,6 +71,32 @@ database:
     nlist: 1024                      # IVF 索引聚类数
     nprobe: 16                       # 查询时探针数（精度与速度的权衡）
     description: "药品说明书切分文本块向量库"
+
+  # v1.0.0: 多源检索配置
+  multi_source:
+    enabled: true                    # 是否启用多源并行检索
+    default_sources:                 # 默认检索源
+      - "drug"
+      - "disease"
+      - "guideline"
+      - "literature"
+    top_n_per_source: 5              # 每个源取 Top-N
+    final_top_n: 15                  # 跨源融合后最终取 N 条
+    per_source_min: 2                # 均衡采样时每种源至少保留的条数
+    # 各 source_type 的向量检索参数
+    source_params:
+      drug:
+        vector_top_k: 20
+        bm25_top_k: 20
+      disease:
+        vector_top_k: 15
+        bm25_top_k: 15
+      guideline:
+        vector_top_k: 15
+        bm25_top_k: 15
+      literature:
+        vector_top_k: 15
+        bm25_top_k: 15
 
   mysql:
     database: "rag_pharma"

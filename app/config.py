@@ -200,6 +200,21 @@ class Config:
         return _yaml_section("models.intent.max_tokens", 200)
 
     # ============================================================
+    # 模型配置 —— 病例结构化提取
+    # ============================================================
+    @property
+    def case_extraction_model(self) -> str:
+        return _yaml_section("models.case_extraction.model", "qwen-flash")
+
+    @property
+    def case_extraction_temperature(self) -> float:
+        return _yaml_section("models.case_extraction.temperature", 0.1)
+
+    @property
+    def case_extraction_max_tokens(self) -> int:
+        return _yaml_section("models.case_extraction.max_tokens", 800)
+
+    # ============================================================
     # 模型配置 —— 问答生成
     # ============================================================
     @property
@@ -228,6 +243,30 @@ class Config:
     @property
     def rerank_model(self) -> str:
         return _yaml_section("models.rerank.model", "")
+
+    # ============================================================
+    # v1.0.0: 多源检索配置
+    # ============================================================
+    @property
+    def multi_source_enabled(self) -> bool:
+        return _yaml_section("database.multi_source.enabled", True)
+
+    @property
+    def multi_source_default_sources(self) -> list:
+        return _yaml_section("database.multi_source.default_sources",
+                           ["drug", "disease", "guideline", "literature"])
+
+    @property
+    def multi_source_top_n_per_source(self) -> int:
+        return _yaml_section("database.multi_source.top_n_per_source", 5)
+
+    @property
+    def multi_source_final_top_n(self) -> int:
+        return _yaml_section("database.multi_source.final_top_n", 15)
+
+    @property
+    def multi_source_per_source_min(self) -> int:
+        return _yaml_section("database.multi_source.per_source_min", 2)
 
     # ============================================================
     # 检索配置

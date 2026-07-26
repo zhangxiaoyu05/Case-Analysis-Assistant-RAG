@@ -1,10 +1,10 @@
 #!/usr/bin/env python
 """
-统一初始化脚本
+统一初始化脚本 (v1.0.0)
 
 一键初始化所有存储层：
-1. MySQL — 检查 4 张业务表是否存在
-2. Milvus — 创建 Collection + 索引
+1. MySQL — 检查业务表状态（含 v1.0.0 新增 6 张表）
+2. Milvus — 创建 4 个 Collection + 索引
 3. Redis — 连通性检查（PING）
 4. 健康检查汇总
 
@@ -30,7 +30,7 @@ from scripts.init_milvus import init_milvus
 
 
 def check_mysql() -> dict:
-    """检查 MySQL 表状态"""
+    """检查 MySQL 表状态（含 v1.0.0 新增表）。"""
     from app.db.mysql_client import MySQLClient
 
     logger.info("\n" + "─" * 50)
@@ -43,6 +43,7 @@ def check_mysql() -> dict:
 
         stats = client.get_table_stats()
         is_ready = client.is_ready()
+        is_v1_ready = client.is_v1_ready()
 
         logger.info(f"连接: {client._host}:{client._port}/{client._database}")
         for table, count in stats.items():
@@ -51,11 +52,16 @@ def check_mysql() -> dict:
             else:
                 logger.info(f"  {table}: ✅ ({count} 行)")
 
+        if is_v1_ready:
+            logger.info("所有 v1.0.0 表就绪 ✅")
+        elif is_ready:
+            logger.info("核心表就绪，部分 v1.0.0 新表缺失（可执行 migration_v3.sql 创建）")
+
         client.disconnect()
-        return {"success": True, "ready": is_ready, "stats": stats}
+        return {"success": True, "ready": is_ready, "v1_ready": is_v1_ready, "stats": stats}
     except Exception as e:
         logger.error(f"MySQL 连接失败: {e}")
-        return {"success": False, "ready": False, "stats": {}, "error": str(e)}
+        return {"success": False, "ready": False, "v1_ready": False, "stats": {}, "error": str(e)}
 
 
 def check_redis() -> dict:
@@ -85,12 +91,12 @@ def check_redis() -> dict:
 
 def main() -> None:
     parser = argparse.ArgumentParser(
-        description="RAG 药品问答系统 — 一键初始化所有存储层"
+        description="RAG 临床病例分析助手 — 一键初始化所有存储层"
     )
     parser.add_argument(
         "--force",
         action="store_true",
-        help="强制重建 Milvus Collection",
+        help="强制重建所有 Milvus Collection",
     )
     parser.add_argument(
         "--skip-mysql",
@@ -110,7 +116,7 @@ def main() -> None:
     args = parser.parse_args()
 
     logger.info("=" * 60)
-    logger.info("RAG 药品问答系统 — 存储层初始化")
+    logger.info("RAG 临床病例分析助手 — 存储层初始化 (v1.0.0)")
     logger.info("=" * 60)
     logger.info(f"Milvus: {config.MILVUS_HOST}:{config.MILVUS_PORT}")
     logger.info(f"MySQL:  {config.MYSQL_HOST}:{config.MYSQL_PORT}/{config.MYSQL_DATABASE}")
@@ -158,6 +164,8 @@ def main() -> None:
         logger.info("\n🎉 所有存储层初始化完成！")
     else:
         logger.warning("\n⚠️ 部分存储层未就绪，请检查上述错误信息")
+        if results.get("mysql", {}).get("ready") and not results.get("mysql", {}).get("v1_ready"):
+            logger.info("💡 提示: 执行 mysql -u root -p rag_pharma < scripts/migration_v3.sql 创建 v1.0.0 新表")
 
     sys.exit(0 if all_ready else 1)
 

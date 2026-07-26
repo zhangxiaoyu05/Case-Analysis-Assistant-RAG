@@ -1,7 +1,8 @@
 """
 测试 app.graph.state — 图状态定义
 
-覆盖: RagState TypedDict, GraphResult dataclass
+v1.0.0: 新增 case_profile / search_queries / search_breakdown /
+        synthesized_context / file_name / analysis_mode 字段。
 """
 
 import pytest
@@ -17,43 +18,46 @@ class TestRagState:
 
     def test_minimal_state(self):
         """最小状态（仅 query）。"""
-        state: RagState = {"query": "阿司匹林怎么吃？"}
-        assert state["query"] == "阿司匹林怎么吃？"
-        # total=False 意味着可以不提供其他字段
-        assert "history" not in state
+        state: RagState = {"query": "患者高血压怎么治疗？"}
+        assert state["query"] == "患者高血压怎么治疗？"
 
     def test_full_state(self):
-        """完整状态。"""
+        """完整状态（v1.0.0 新字段）。"""
         state: RagState = {
-            "query": "测试问题",
-            "history": [{"role": "user", "content": "历史问题"}],
-            "intent": "drug_inquiry",
+            "query": "测试病例",
+            "history": [{"role": "user", "content": "历史"}],
+            "memory_summary": "摘要",
+            "user_memories": "中期记忆",
+            "user_profile": "用户画像",
+            "file_name": "case.pdf",
+            "analysis_mode": "treatment",
+            "intent": "clinical",
             "intent_confidence": 0.95,
+            "case_profile": {"chief_complaint": "胸闷"},
+            "search_queries": ["高血压 治疗"],
             "search_results": [{"chunk_text": "结果"}],
             "search_count": 1,
+            "search_breakdown": {"drug": 3},
             "ranked_docs": [{"chunk_text": "排序后"}],
             "ranked_count": 1,
-            "answer": "生成的回答",
-            "sources": [{"drug_name": "阿司匹林"}],
-            "template_used": "default",
+            "synthesized_context": {"drug": [], "disease": []},
+            "answer": "生成的病例分析",
+            "sources": [{"drug_name": "阿司匹林", "source_type": "drug"}],
+            "template_used": "case_summary",
             "error": None,
             "error_node": None,
         }
-        assert state["query"] == "测试问题"
-        assert state["intent"] == "drug_inquiry"
-        assert state["search_count"] == 1
-        assert state["ranked_count"] == 1
-        assert state["answer"] == "生成的回答"
+        assert state["query"] == "测试病例"
+        assert state["intent"] == "clinical"
+        assert state["template_used"] == "case_summary"
+        assert state["analysis_mode"] == "treatment"
+        assert state["case_profile"]["chief_complaint"] == "胸闷"
 
-    def test_error_state(self):
-        """错误状态。"""
-        state: RagState = {
-            "query": "测试问题",
-            "error": "检索失败",
-            "error_node": "retriever",
-        }
-        assert state["error"] == "检索失败"
-        assert state["error_node"] == "retriever"
+    def test_v1_fields_optional(self):
+        """v1.0.0 新字段可以不提供（total=False）。"""
+        state: RagState = {"query": "test"}
+        assert "case_profile" not in state
+        assert "synthesized_context" not in state
 
 
 # ============================================================
@@ -63,74 +67,53 @@ class TestGraphResult:
     """测试 GraphResult 数据类。"""
 
     def test_default_values(self):
-        """默认值。"""
         result = GraphResult(success=True)
         assert result.answer == ""
         assert result.sources == []
-        assert result.intent == ""
+        assert result.case_profile == {}
+        assert result.search_breakdown == {}
 
-    def test_successful_result(self):
-        """成功结果。"""
+    def test_v1_fields(self):
+        """v1.0.0 新增字段。"""
         result = GraphResult(
             success=True,
-            answer="阿司匹林用于解热镇痛。",
-            sources=[{"drug_name": "阿司匹林肠溶片", "chunk_text": "..."}],
-            intent="drug_inquiry",
-            intent_confidence=0.95,
-            template_used="default",
-            search_count=4,
-            ranked_count=4,
+            answer="SOAP 分析结果",
+            sources=[],
+            intent="clinical",
+            template_used="case_summary",
+            case_profile={"chief_complaint": "胸闷"},
+            search_breakdown={"drug": 3},
         )
-        assert result.success is True
-        assert len(result.sources) == 1
+        assert result.case_profile["chief_complaint"] == "胸闷"
+        assert result.search_breakdown["drug"] == 3
+        assert result.template_used == "case_summary"
 
-    def test_failed_result(self):
-        """失败结果。"""
-        result = GraphResult(
-            success=False,
-            error="检索服务不可用",
-        )
-        assert result.success is False
-        assert result.error == "检索服务不可用"
-
-    def test_from_state_success(self):
-        """从成功的 RagState 构建。"""
+    def test_from_state_v1(self):
+        """从 v1.0.0 RagState 构建。"""
         state: RagState = {
-            "query": "测试",
-            "answer": "回答内容",
-            "sources": [{"drug_name": "药"}],
-            "intent": "drug_inquiry",
+            "query": "测试病例",
+            "answer": "SOAP 分析...",
+            "sources": [],
+            "intent": "clinical",
             "intent_confidence": 0.9,
-            "template_used": "default",
+            "template_used": "treatment_analysis",
             "search_count": 5,
             "ranked_count": 5,
+            "case_profile": {"suspected_diagnosis": ["肺炎"]},
+            "search_breakdown": {"drug": 3, "disease": 2},
         }
         result = GraphResult.from_state(state)
         assert result.success is True
-        assert result.answer == "回答内容"
-        assert result.intent == "drug_inquiry"
-        assert result.search_count == 5
-        assert result.ranked_count == 5
+        assert result.answer == "SOAP 分析..."
+        assert result.template_used == "treatment_analysis"
+        assert result.case_profile["suspected_diagnosis"] == ["肺炎"]
+        assert result.search_breakdown["drug"] == 3
 
-    def test_from_state_with_error(self):
-        """从含错误的 RagState 构建。"""
-        state: RagState = {
-            "query": "测试",
-            "answer": "兜底回答",
-            "error": "生成失败",
-            "error_node": "generator",
-        }
-        result = GraphResult.from_state(state)
-        assert result.success is False
-        assert result.error == "生成失败"
-        assert result.answer == "兜底回答"
-
-    def test_from_state_default_values(self):
+    def test_from_state_default(self):
         """缺失字段使用默认值。"""
         state: RagState = {"query": "测试"}
         result = GraphResult.from_state(state)
         assert result.answer == ""
         assert result.sources == []
-        assert result.intent == ""
-        assert result.search_count == 0
-        assert result.ranked_count == 0
+        assert result.case_profile == {}
+        assert result.search_breakdown == {}

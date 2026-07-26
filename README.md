@@ -1,16 +1,18 @@
-# 💊 RAG 药品说明书智能问答系统
+# 🏥 RAG 临床病例分析助手
 
+基于 **RAG（检索增强生成）** 的临床病例智能分析系统。支持上传病例文档（PDF / DOCX / TXT），自动提取关键信息，生成 **SOAP 格式**结构化分析报告，并标注循证引用来源和证据级别。
 
-基于 **RAG（检索增强生成）** 的药品知识问答系统。支持上传药品说明书文档（PDF / DOCX / TXT），自动构建知识库，提供基于语义检索 + 大模型生成的智能问答服务。
+**面向用户**：执业医师 / 临床药师
 
 ## 🏗️ 技术架构
 
 ```
 ┌──────────────────────────────────────────────────────────┐
-│                      前端（四界面）                        │
+│                    前端（四界面）                          │
 │   Web 原生界面（index.html / login.html / manage.html / profile.html）│
+│   支持文件拖拽上传 + 分析模式选择 + SOAP 结果渲染          │
 └───────────────────────┬──────────────────────────────────┘
-                        │ HTTP / SSE
+                        │ HTTP / SSE (multipart/form-data)
 ┌───────────────────────▼──────────────────────────────────┐
 │               FastAPI 后端（app/api/）                     │
 │   /api/v1/chat  /auth  /conversations  /user  /knowledge  │
@@ -18,16 +20,16 @@
 └───────────────────────┬──────────────────────────────────┘
                         │
 ┌───────────────────────▼──────────────────────────────────┐
-│           LangGraph 流程编排（app/graph/）                  │
+│           LangGraph 流程编排（app/graph/） 8 节点           │
 │                                                          │
-│   START → intent ──┬─ drug_inquiry → retrieve → rank      │
-│                    │                 → generate → END     │
-│                    ├─ chitchat → END（闲聊直达）            │
-│                    ├─ general → END（LLM 直接回答）         │
-│                    └─ attack → END（安全拒绝）              │
+│   START → intent ──┬─ clinical → case_preprocess         │
+│                    │       → multi_retrieve → rank       │
+│                    │       → synthesize → generate → END │
+│                    ├─ chitchat → END（问候直达）            │
+│                    └─ not_clinical → reject → END（拦截）  │
 │                                                          │
 │   各节点调用 app/online/ 的组件：                           │
-│   意图分类器 / 混合检索器 / 重排序器 / 答案生成器            │
+│   门禁判断 / 病例预处理 / 多路检索 / 重排序 / 上下文合成 / 生成│
 └───────────────────────┬──────────────────────────────────┘
                         │
 ┌───────────────────────▼──────────────────────────────────┐
@@ -39,24 +41,38 @@
 
 ## ✨ 核心功能
 
+### 临床病例分析
+
+| 模块 | 功能 |
+|------|------|
+| 病例上传 | 支持 PDF / DOCX / TXT，拖拽或点击上传（≤20MB） |
+| 病例预处理 | LLM 结构化提取（主诉、现病史、既往史、检查结果、用药、诊断等） |
+| 分析模式 | 综合分析 / 鉴别诊断 / 诊疗评估 / 用药审查 |
+| SOAP 输出 | S（主观）/ O（客观）/ A（评估）/ P（计划）标准临床格式 |
+| 循证引用 | 每条建议标注来源 + 证据级别（IA/IB/IIA/IIB/III/IV） |
+| 多源知识库 | 药品说明书 + 疾病知识 + 临床指南 + 学术文献，4 路并行检索 |
+
 ### 离线知识库构建
 
 | 模块 | 功能 |
 |------|------|
 | 文档加载 | 支持 PDF / DOCX / TXT 格式，自动识别 UTF-8 / GBK 编码 |
+| 多源识别 | 自动检测多药品合集并拆分为独立文档 |
 | 文本清洗 | 空白规范化、PDF 伪影去除、Unicode 规范化、可选 LLM 脱敏 |
-| 章节感知切分 | 识别 `【章节名】` 标记，智能合并短章节和尾块 |
+| 4 种切分器 | 药品（`【章节】`）+ 疾病（Markdown/编号/关键词）+ 指南（推荐等级/证据级别）+ 文献（IMRaD/牛津等级） |
 | 向量化 | DashScope text-embedding-v4，1024 维，支持批量 + 自动重试 |
-| 入库 | MySQL（原始文档 + 文本块 BM25 全文索引）+ Milvus（向量） |
+| 入库 | MySQL（9 张表 + BM25 全文索引）+ Milvus（4 个 Collection） |
 
 ### 在线智能问答
 
 | 模块 | 功能 |
 |------|------|
-| 意图识别 | qwen-flash，LLM 四意图分类（drug_inquiry / chitchat / general / attack），Few-shot 提示词 |
+| 门禁判断 | qwen-flash，二元分类（clinical / not_clinical），极简 prompt Few-shot |
+| 病例提取 | qwen-flash，结构化提取 10 个临床字段（主诉/现病史/既往史/检查/用药/诊断/异常等） |
 | 混合检索 | Milvus 向量检索 + MySQL BM25 全文检索 → RRF 融合 |
 | 重排序 | qwen3-rerank，对检索结果二次排序，失败自动回退到原始排序 |
-| 答案生成 | qwen3-max，支持 4 种场景模板（默认问答 / 药品对比 / 用法用量追问 / 通用问答） |
+| 上下文合成 | 按疾病/指南/药品/文献四个维度组织检索结果 |
+| 答案生成 | qwen3-max，5 种 SOAP 模板（case_summary/differential_diagnosis/treatment_analysis/drug_review/guideline_lookup） |
 | 流式输出 | SSE（Server-Sent Events），逐 token 实时返回 |
 
 ### 用户系统与记忆体系
@@ -66,23 +82,16 @@
 | 用户认证 | JWT 登录/注册，bcrypt 密码哈希，7 天 token 有效期 |
 | 多会话管理 | 多对话窗口（创建/切换/删除），LLM 自动生成对话标题 |
 | 短期记忆 | Redis 滑动窗口 + qwen-flash 累积摘要，旧对话压缩注入 Prompt |
-| 中期记忆 | MySQL 持久化，5 种类型（药品关注/担忧顾虑/偏好倾向/用药计划/个人事实），每日衰减 ×0.95，关键词去重合并 |
+| 中期记忆 | MySQL 持久化，5 种类型（药品关注/担忧顾虑/偏好倾向/用药计划/个人事实），每日衰减 ×0.95 |
 | 长期记忆 | EAV 模式的用户画像（9 个字段），LLM 自动提取 + 用户手动编辑，永不过期 |
-| 用户主页 | 昵称设置、画像字段 CRUD、置信度徽标展示 |
-
-### 会话与知识库管理
-
-- Redis 多轮对话历史（自动 TTL 过期 + 轮数裁剪）
-- 知识库药品 CRUD（上传入库 / 列表查询 / 删除）
-- 健康检查（Milvus / MySQL / Redis 连接状态）
 
 ### 安全防护
 
 - **认证层**：JWT 登录鉴权 + bcrypt 密码哈希 + 7 天 token 有效期
 - **接口层**：API Key 鉴权（知识库管理）+ 基于 IP 的速率限制
-- **AI 层**：四意图分类 + 路由隔离（drug_inquiry → RAG 检索 / chitchat → 闲聊直达 / general → LLM 直接回答 / attack → 安全拒绝），Few-shot 提示词抗注入
+- **AI 层**：二元门禁 + 路由隔离（clinical → RAG 检索 / not_clinical → 统一拦截），问候白名单零 token 回应
 - **HTTP 层**：安全响应头（X-Content-Type-Options / X-Frame-Options / XSS Protection）
-- **攻击检测**：提示词注入 / 越狱 / 间接注入 / 语义诱导
+- **攻击检测**：提示词注入 / 越狱 / 间接注入，由门禁 LLM 统一拦截
 
 ## 🚀 快速开始
 
@@ -127,27 +136,31 @@ pip install -r requirements.txt
 ### 6. 离线入库（构建知识库）
 
 ```bash
-# 单个文件入库
+# 药品说明书入库
 python scripts/run_offline.py --file data/raw/阿莫西林胶囊.txt
 
-# 目录批量入库（处理 data/raw/ 下所有文档）
+# 临床指南入库
+python scripts/run_offline.py --file guideline.pdf --source-type guideline \
+    --guideline-title "中国心力衰竭诊疗指南2024"
+
+# 疾病知识入库
+python scripts/run_offline.py --file disease.txt --source-type disease \
+    --disease-name "2型糖尿病"
+
+# 学术文献入库
+python scripts/run_offline.py --file paper.pdf --source-type literature
+
+# 目录批量入库
 python scripts/run_offline.py --dir data/raw/
 
-# 干跑预览（不入库，仅查看切分效果）
-python scripts/run_offline.py --file data/raw/头孢克肟分散片.txt --dry-run
-
-# 指定药品名称和厂家
-python scripts/run_offline.py --file doc.pdf --drug-name "布洛芬" --manufacturer "拜耳医药"
+# 干跑预览（不入库）
+python scripts/run_offline.py --file doc.pdf --dry-run
 ```
 
-### 7. 启动问答服务
+### 7. 启动服务
 
 ```bash
-# FastAPI 后端（端口 8000）
 uvicorn app.api.main:app --host 0.0.0.0 --port 8000 --reload
-
-# 或 Streamlit 前端（端口 8501）
-streamlit run frontend/streamlit_app.py
 ```
 
 访问 http://localhost:8000 使用 Web 界面，或 http://localhost:8000/docs 查看 Swagger API 文档。
@@ -158,111 +171,17 @@ streamlit run frontend/streamlit_app.py
 docker compose up -d
 ```
 
-自动启动 Milvus + MySQL + Redis + FastAPI 全套服务。MySQL 容器首次启动时自动建表（含用户系统 + 三段记忆表）。
-
-### 升级已有部署
-
-如果从旧版本升级，需要手动运行迁移脚本：
-
-```bash
-# 用户系统 + 多会话管理
-docker exec -i rag-mysql mysql -uroot -p${MYSQL_PASSWORD} rag_pharma < scripts/migration_v2.sql
-
-# 三段记忆体系
-docker exec -i rag-mysql mysql -uroot -p${MYSQL_PASSWORD} rag_pharma < scripts/migration_memory.sql
-```
-
-## 📂 项目结构
-
-```
-├── app/
-│   ├── api/                    # FastAPI 接口层
-│   │   ├── main.py             # 应用入口 + lifespan 生命周期
-│   │   ├── auth.py             # API Key 鉴权模块
-│   │   ├── middleware.py        # 速率限制 + 安全响应头中间件
-│   │   ├── dependencies.py     # 依赖注入（单例获取 + JWT 鉴权）
-│   │   └── routers/            # 路由模块
-│   │       ├── chat.py         # 问答接口（单轮 + 流式 + 三段记忆集成）
-│   │       ├── auth.py         # 认证接口（注册 / 登录 / 当前用户）
-│   │       ├── conversations.py # 会话管理接口（CRUD + 列表）
-│   │       ├── user.py         # 用户接口（设置 / 个人画像）
-│   │       ├── health.py       # 健康检查 / 就绪检查
-│   │       └── knowledge.py    # 知识库管理（上传 / 查询 / 删除）
-│   ├── config.py               # 统一配置层（.env + config.yaml 合并）
-│   ├── db/                     # 数据库客户端
-│   │   ├── milvus_client.py    # Milvus 向量数据库封装
-│   │   └── mysql_client.py     # MySQL 封装（含 BM25 全文检索）
-│   ├── graph/                  # LangGraph 流程编排
-│   │   ├── state.py            # RAG 图状态定义（TypedDict）
-│   │   ├── nodes.py            # 节点函数（intent / retrieve / rank / generate 等）
-│   │   ├── edges.py            # 条件路由（意图路由 / 检索后路由）
-│   │   └── graph.py            # 图构建 + 编译（模块级单例）
-│   ├── offline/                # 离线入库流程
-│   │   ├── loader.py           # 文档加载器（PDF / DOCX / TXT）
-│   │   ├── cleaner.py          # 文本清洗器（规范化 + 可选脱敏）
-│   │   ├── splitter.py         # 章节感知切分器
-│   │   ├── multi_drug_splitter.py  # 多药品合集文件拆分器
-│   │   ├── embedder.py         # 向量化器（DashScope TextEmbedding）
-│   │   └── pipeline.py         # 流程编排器（运行完整入库流水线）
-│   ├── online/                 # 在线问答流程
-│   │   ├── intent.py           # 意图分类器
-│   │   ├── retriever.py        # 混合检索器（向量 + BM25 → RRF 融合）
-│   │   ├── ranker.py           # 重排序器（qwen3-rerank）
-│   │   └── generator.py        # 答案生成器（qwen3-max + 流式输出）
-│   ├── schemas/                # Pydantic 数据模型
-│   │   ├── chat.py             # 问答请求 / 响应 / 历史模型
-│   │   └── common.py           # 通用模型（健康检查 / 错误响应）
-│   └── services/               # 业务服务层
-│       ├── history_manager.py   # Redis 异步会话历史管理
-│       ├── memory_manager.py    # 短期记忆管理器（滑动窗口 + 累积摘要）
-│       ├── conversation_manager.py # 多会话管理（CRUD + 标题自动生成）
-│       ├── user_manager.py      # 用户服务（注册/登录/JWT签发/bcrypt）
-│       ├── user_memory_manager.py  # 中期记忆管理器（LLM提取 + 衰减 + 召回）
-│       └── user_profile_manager.py # 长期记忆管理器（EAV画像 + 编辑）
-├── config/
-│   ├── config.yaml             # 业务参数（模型 / 检索 / 数据库 / 日志）
-│   └── prompts.yaml            # 提示词模板（意图 / 生成 / 脱敏 / 质量评估）
-├── data/
-│   ├── raw/                    # 22 个药品说明书文件（20 个单药品 + 2 个合集）
-│   └── uploads/                # Web 上传文件暂存目录
-├── frontend/
-│   ├── index.html              # 主应用界面（侧边栏 + 对话区）
-│   ├── login.html              # 登录/注册页面
-│   ├── manage.html             # 知识库管理界面
-│   ├── profile.html            # 用户个人资料页面
-│   └── streamlit_app.py        # Streamlit 前端（含短期记忆支持）
-├── scripts/
-│   ├── init_collection.py      # 一键初始化所有存储层
-│   ├── init_milvus.py          # Milvus Collection 创建 + 索引构建
-│   ├── mysql_init.sql          # MySQL 建库建表脚本（Docker 自动执行）
-│   ├── migration_v2.sql        # users + conversations 表迁移
-│   ├── migration_memory.sql    # user_memories + user_profiles 表迁移
-│   ├── run_offline.py          # 离线入库 CLI 工具
-│   └── split_drug_file.py      # 药品合集文件拆分工具
-├── tests/                      # 单元测试（370+ tests）
-│   ├── conftest.py             # 共享 fixtures + mocks
-│   ├── test_offline/           # 离线流程测试
-│   ├── test_online/            # 在线流程测试
-│   ├── test_graph/             # LangGraph 图测试
-│   ├── test_api/               # API 接口测试
-│   └── test_services/          # 业务服务测试（含记忆管理）
-├── docker-compose.yml          # Docker 服务编排（6 个容器）
-├── Dockerfile                  # API 服务容器镜像
-├── pyproject.toml              # 项目元数据 + 工具配置
-├── requirements.txt            # 运行时依赖
-└── requirements-dev.txt        # 开发依赖（测试 / 代码检查）
-```
-
 ## 🤖 模型配置
 
-所有模型使用阿里云 DashScope 平台，通过 `config/config.yaml` 配置：
+所有模型使用阿里云 DashScope 平台：
 
 | 环节 | 模型 | 说明 |
 |------|------|------|
 | 嵌入 | `text-embedding-v4` | 文本转向量，1024 维 |
-| 意图识别 | `qwen-flash` | 轻量模型，四分类（drug_inquiry/chitchat/general/attack） |
+| 门禁判断 | `qwen-flash` | 轻量模型，二元分类（clinical/not_clinical） |
+| 病例提取 | `qwen-flash` | 结构化提取 10 个临床字段 |
 | 重排序 | `qwen3-rerank` | 检索结果二次排序 |
-| 答案生成 | `qwen3-max` | 高质量生成回答 |
+| 答案生成 | `qwen3-max` | 高质量 SOAP 格式回答 |
 | 短期记忆 | `qwen-flash` | 对话摘要压缩 |
 | 中期记忆 | `qwen-flash` | 多轮对话提取 5 类记忆 |
 | 长期记忆 | `qwen-flash` | 用户画像字段提取 |
@@ -274,7 +193,7 @@ docker exec -i rag-mysql mysql -uroot -p${MYSQL_PASSWORD} rag_pharma < scripts/m
 | `GET` | `/` | → 重定向到 `/app` |
 | `GET` | `/login` | 登录/注册页面 |
 | `GET` | `/app` | 主应用界面（index.html） |
-| `GET` | `/manage` | 知识库管理界面（manage.html） |
+| `GET` | `/manage` | 知识库管理界面 |
 | `GET` | `/profile` | 用户个人资料页面 |
 | `GET` | `/docs` | Swagger API 文档 |
 | `GET` | `/health` | 基础健康检查 |
@@ -282,29 +201,75 @@ docker exec -i rag-mysql mysql -uroot -p${MYSQL_PASSWORD} rag_pharma < scripts/m
 | `POST` | `/api/v1/auth/register` | 用户注册 |
 | `POST` | `/api/v1/auth/login` | 用户登录 |
 | `GET` | `/api/v1/auth/me` | 获取当前用户信息 |
-| `POST` | `/api/v1/chat` | 单轮问答 |
-| `POST` | `/api/v1/chat/stream` | 流式问答（SSE） |
-| `GET` | `/api/v1/chat/history/{id}` | 获取多轮对话历史 |
+| `POST` | `/api/v1/chat` | 单轮问答（multipart/form-data，支持文件上传） |
+| `POST` | `/api/v1/chat/stream` | 流式问答（SSE，支持文件上传） |
+| `GET` | `/api/v1/chat/history/{id}` | 获取对话历史 |
 | `DELETE` | `/api/v1/chat/history/{id}` | 清除会话 |
 | `GET` | `/api/v1/conversations` | 获取对话列表 |
 | `POST` | `/api/v1/conversations` | 创建新对话 |
-| `PATCH` | `/api/v1/conversations/{id}` | 更新对话（标题等） |
+| `PATCH` | `/api/v1/conversations/{id}` | 更新对话 |
 | `DELETE` | `/api/v1/conversations/{id}` | 删除对话 |
 | `GET` | `/api/v1/user/settings` | 获取用户设置 |
 | `PUT` | `/api/v1/user/settings` | 更新昵称 |
 | `GET` | `/api/v1/user/profile` | 获取个人画像 |
 | `PUT` | `/api/v1/user/profile` | 批量更新画像字段 |
-| `DELETE` | `/api/v1/user/profile/{field}` | 删除画像字段 |
-| `POST` | `/api/v1/knowledge/upload` | 上传文档构建知识库 |
-| `GET` | `/api/v1/knowledge/status/{id}` | 查询入库批次状态 |
-| `GET` | `/api/v1/knowledge/drugs` | 列出已入库药品 |
-| `DELETE` | `/api/v1/knowledge/drug/{id}` | 删除指定药品（MySQL + Milvus） |
+| `POST` | `/api/v1/knowledge/upload` | 上传文档构建知识库（支持 drug/disease/guideline/literature） |
+| `GET` | `/api/v1/knowledge/sources` | 列出所有 source_type 的知识条目（含统计） |
+| `GET` | `/api/v1/knowledge/drugs` | 列出已入库药品（向后兼容） |
+| `DELETE` | `/api/v1/knowledge/source/{type}/{id}` | 删除指定来源类型文档（MySQL + Milvus 同步） |
+| `DELETE` | `/api/v1/knowledge/drug/{id}` | 删除指定药品（向后兼容） |
 
 ## 🧪 运行测试
 
 ```bash
 pip install -r requirements-dev.txt
-pytest tests/ -v
+pytest tests/ -v          # 407 个测试用例，全部通过
+pytest tests/ -q          # 简洁输出
+pytest tests/ --cov=app   # 含覆盖率报告
+```
+
+## 📂 项目结构
+
+```
+├── app/
+│   ├── api/                    # FastAPI 接口层
+│   │   ├── main.py             # 应用入口 + lifespan
+│   │   ├── auth.py             # API Key 鉴权
+│   │   ├── middleware.py        # 速率限制 + 安全头
+│   │   ├── dependencies.py     # 依赖注入
+│   │   └── routers/            # 路由：chat / auth / conversations / user / health / knowledge
+│   ├── config.py               # 统一配置（.env + config.yaml）
+│   ├── db/                     # 数据库客户端
+│   │   ├── milvus_client.py    # Milvus 向量数据库（多 Collection 统一 schema）
+│   │   └── mysql_client.py     # MySQL + BM25（9 表 + 通用路由方法）
+│   ├── graph/                  # LangGraph 流程编排（8 节点）
+│   │   ├── state.py            # RagState + GraphResult
+│   │   ├── nodes.py            # intent / case_preprocess / multi_retrieve / rank / synthesize / generate / chitchat / reject
+│   │   ├── edges.py            # 条件路由
+│   │   └── graph.py            # 图构建 + 编译
+│   ├── offline/                # 离线入库（4 种知识源切分器）
+│   │   ├── loader.py           # 文档加载（PDF/DOCX/TXT）
+│   │   ├── cleaner.py          # 文本清洗
+│   │   ├── splitter.py         # 药品说明书切分器
+│   │   ├── splitter_disease.py # 疾病知识切分器
+│   │   ├── splitter_guideline.py # 临床指南切分器（含推荐等级/证据级别检测）
+│   │   ├── splitter_literature.py # 学术文献切分器（IMRaD + 牛津证据等级）
+│   │   ├── multi_drug_splitter.py # 多药品合集智能检测与拆分
+│   │   ├── embedder.py         # 向量化
+│   │   └── pipeline.py         # 流程编排（source_type 路由）
+│   ├── online/                 # 在线问答
+│   │   ├── intent.py           # 门禁判断（clinical/not_clinical）
+│   │   ├── retriever.py        # 混合检索 + 多源并行检索（4 collection RRF 融合）
+│   │   ├── ranker.py           # 重排序
+│   │   └── generator.py        # 答案生成（5 种 SOAP 模板）
+│   ├── schemas/                # Pydantic 模型
+│   └── services/               # 业务服务（记忆/会话/用户）
+├── config/
+│   ├── config.yaml             # 业务参数
+│   └── prompts.yaml            # 提示词模板（gatekeeper + case_extraction + 5 SOAP 模板）
+├── frontend/                   # Web 前端（4 页面：index/login/manage/profile）
+├── scripts/                    # 工具脚本（含 migration_v3.sql 数据库增量迁移）
+└── tests/                      # 测试（407 tests，全部通过）
 ```
 
 ## 📄 许可

@@ -3,15 +3,18 @@
 
 串联文档加载 → 清洗 → 切分 → 向量化 → MySQL + Milvus 入库的完整流程。
 
+v1.0.0: 支持多源文档（drug/disease/guideline/literature）。
+
 支持:
 - 单药品文档: 一个文件 = 一种药品（常规流程）
 - 多药品合集: 一个文件包含多种药品 → 智能拆分后每种独立入库
+- 疾病/指南/文献: source_type 路由 + 专用切分器
 
 使用方式:
     from app.offline.pipeline import run_pipeline, PipelineResult
 
     result = run_pipeline("data/raw/阿司匹林说明书.pdf")
-    print(f"处理完成: {result.total_chunks} 个 chunk, {result.indexed_chunks} 个已索引")
+    result = run_pipeline("data/raw/心衰指南2024.pdf", source_type="guideline")
 """
 
 import time
@@ -34,6 +37,10 @@ from app.offline.multi_drug_splitter import (
     split_multi_drug,
 )
 from app.offline.splitter import Chunk, split_document
+# v1.0.0: 新切分器
+from app.offline.splitter_disease import split_disease_document
+from app.offline.splitter_guideline import split_guideline_document
+from app.offline.splitter_literature import split_literature_document
 
 
 # ============================================================
@@ -72,23 +79,25 @@ def _process_single_drug(
     mysql_client: Optional[MySQLClient] = None,
     milvus_client: Optional[MilvusClient] = None,
     embedder: Optional[Embedder] = None,
+    # v1.0.0
+    source_type: str = "drug",
+    **extra_fields,
 ) -> PipelineResult:
     """
-    处理单个药品文档的核心逻辑（步骤 2-8）。
+    处理单个文档的核心逻辑（步骤 2-8）。v1.0.0 支持多源路由。
 
     对给定的文本执行：清洗 → 切分 → MySQL 入库 → 向量化 → Milvus 入库。
 
     Args:
-        raw_text: 药品说明书的原始文本
-        drug_name: 药品名称
-        source_file: 来源文件名（用于日志/记录）
-        drug_manufacturer: 生产厂家
-        drug_category: 药品分类
+        raw_text: 原始文本
+        drug_name: 来源名称（药品名/疾病名/指南标题/文献标题）
+        source_file: 来源文件名
         desensitize: 是否启用 LLM 脱敏
         batch_id: 批次 ID（自动生成）
         mysql_client: MySQL 客户端（必传）
         milvus_client: Milvus 客户端（必传）
         embedder: Embedder 实例（必传）
+        source_type: drug / disease / guideline / literature
 
     Returns:
         PipelineResult — 含状态、计数、耗时
@@ -102,8 +111,9 @@ def _process_single_drug(
 
     warnings: list[str] = []
 
+    source_emoji = {"drug": "💊", "disease": "🦠", "guideline": "📋", "literature": "📄"}.get(source_type, "📄")
     logger.info("=" * 60)
-    logger.info(f"💊 处理药品: {drug_name}")
+    logger.info(f"{source_emoji} 处理 {source_type}: {drug_name}")
     logger.info(f"   batch_id: {batch_id}, 来源: {source_file}")
     logger.info(f"   文本长度: {len(raw_text)} 字符")
     logger.info("=" * 60)
@@ -141,10 +151,17 @@ def _process_single_drug(
             )
 
         # ============================================================
-        # 步骤 3: 切分
+        # 步骤 3: 切分（v1.0.0: 按 source_type 选择切分器）
         # ============================================================
-        logger.info("✂️ 文本切分...")
-        chunks: list[Chunk] = split_document(cleaned_text)
+        logger.info(f"✂️ 文本切分（{source_type}）...")
+        if source_type == "disease":
+            chunks: list[Chunk] = split_disease_document(cleaned_text)
+        elif source_type == "guideline":
+            chunks: list[Chunk] = split_guideline_document(cleaned_text)
+        elif source_type == "literature":
+            chunks: list[Chunk] = split_literature_document(cleaned_text)
+        else:
+            chunks: list[Chunk] = split_document(cleaned_text)
 
         if not chunks:
             _finalize_batch(
@@ -165,17 +182,22 @@ def _process_single_drug(
             )
 
         # ============================================================
-        # 步骤 4: 存储原始文档到 MySQL
+        # 步骤 4: 存储原始文档到 MySQL（v1.0.0: 按 source_type 路由）
         # ============================================================
-        logger.info("💾 存储原始文档到 MySQL...")
+        logger.info(f"💾 存储原始文档到 MySQL（{source_type}）...")
         try:
-            doc_id = mysql_client.insert_raw_doc(
-                drug_name=drug_name,
-                raw_content=raw_text,
-                drug_manufacturer=drug_manufacturer,
-                drug_category=drug_category,
-                source_file=source_file,
-            )
+            if source_type == "drug":
+                doc_id = mysql_client.insert_raw_doc(
+                    drug_name=drug_name,
+                    raw_content=raw_text,
+                    drug_manufacturer=drug_manufacturer,
+                    drug_category=drug_category,
+                    source_file=source_file,
+                )
+            else:
+                fields = _build_raw_doc_fields(source_type, drug_name, raw_text,
+                                               source_file, **extra_fields)
+                doc_id = mysql_client.insert_raw_doc_generic(source_type, fields)
             logger.info(f"原始文档已存储: doc_id={doc_id}")
         except Exception as e:
             _finalize_batch(
@@ -205,20 +227,17 @@ def _process_single_drug(
         # ============================================================
         # 步骤 5: 存储文本块到 MySQL（BM25 全文索引）
         # ============================================================
-        logger.info(f"💾 存储 {len(chunks)} 个文本块到 MySQL...")
+        logger.info(f"💾 存储 {len(chunks)} 个文本块到 MySQL（{source_type}）...")
         try:
             chunk_records = []
             for chunk in chunks:
-                chunk_records.append({
-                    "doc_id": doc_id,
-                    "drug_name": drug_name,
-                    "section": chunk.section[:50] if chunk.section else None,
-                    "chunk_index": chunk.chunk_index,
-                    "chunk_text": chunk.chunk_text,
-                    "char_count": chunk.char_count,
-                })
+                record = _build_chunk_record(source_type, doc_id, drug_name, chunk, **extra_fields)
+                chunk_records.append(record)
 
-            mysql_client.insert_chunks_batch(chunk_records)
+            if source_type == "drug":
+                mysql_client.insert_chunks_batch(chunk_records)
+            else:
+                mysql_client.insert_chunks_batch_generic(source_type, chunk_records)
             logger.info(f"文本块已存储: {len(chunk_records)} 条")
         except Exception as e:
             _finalize_batch(
@@ -295,9 +314,12 @@ def _process_single_drug(
                     valid_metadata.append({
                         "doc_id": doc_id,
                         "chunk_index": chunks[i].chunk_index,
-                        "drug_name": drug_name,
-                        "section": chunks[i].section[:50] if chunks[i].section else "",
+                        "source_name": drug_name,
+                        "source_type": source_type,
+                        "section": chunks[i].section[:100] if chunks[i].section else "",
                         "chunk_text": chunks[i].chunk_text,
+                        "extra_field_1": extra_fields.get("evidence_level", ""),
+                        "extra_field_2": _get_extra_field_2(source_type, **extra_fields),
                     })
                 else:
                     failed_chunks += 1
@@ -483,6 +505,11 @@ def run_pipeline(
     mysql_client: Optional[MySQLClient] = None,
     milvus_client: Optional[MilvusClient] = None,
     embedder: Optional[Embedder] = None,
+    # v1.0.0: 多源支持
+    source_type: str = "drug",
+    disease_name: Optional[str] = None,
+    guideline_title: Optional[str] = None,
+    **extra_fields,
 ) -> PipelineResult:
     """
     对单个文档执行完整的离线处理流程。
@@ -490,13 +517,14 @@ def run_pipeline(
     支持：
     - 单药品文档：按常规流程处理（一个文件 → 一种药品）
     - 多药品合集文档：智能检测并拆分为多个独立药品，每种独立入库
+    - v1.0.0: 多源文档（disease/guideline/literature）使用专用切分器
 
     流程:
         1. load_document() — 加载文档原文
         1.5 (新增) detect_multi_drug() — 检测是否为多药品合集
             如果是合集 → split_multi_drug() → 每种药品独立执行步骤 2-8
         2. clean_text() — 清洗文本
-        3. split_document() — 章节感知切分
+        3. 按 source_type 选择切分器
         4. insert_raw_doc() — 存 MySQL 原始文档
         5. insert_chunks_batch() — 存 MySQL 文本块
         6. embedder.embed() — 生成向量
@@ -509,11 +537,14 @@ def run_pipeline(
         drug_manufacturer: 生产厂家
         drug_category: 药品分类
         desensitize: 是否启用 LLM 脱敏
-        overwrite: 药品已存在时是否覆盖旧数据（默认 False，已存在则跳过）
+        overwrite: 已存在时是否覆盖旧数据（默认 False）
         batch_id: 批次 ID（自动生成 UUID）
         mysql_client: 现有 MySQL 客户端（不传则自动创建）
         milvus_client: 现有 Milvus 客户端（不传则自动创建）
         embedder: 现有 Embedder（不传则自动创建）
+        source_type: drug / disease / guideline / literature（默认 drug）
+        disease_name: source_type=disease 时使用
+        guideline_title: source_type=guideline 时使用
 
     Returns:
         PipelineResult — 含状态、计数、耗时。
@@ -532,7 +563,8 @@ def run_pipeline(
         mysql_client = MySQLClient()
         mysql_client.connect()
     if milvus_client is None:
-        milvus_client = MilvusClient()
+        collection_name = f"{source_type}_chunks"
+        milvus_client = MilvusClient(collection_name=collection_name)
         milvus_client.connect()
     if embedder is None:
         embedder = Embedder()
@@ -682,6 +714,10 @@ def run_pipeline(
             mysql_client=mysql_client,
             milvus_client=milvus_client,
             embedder=embedder,
+            source_type=source_type,
+            disease_name=disease_name,
+            guideline_title=guideline_title,
+            **extra_fields,
         )
 
         elapsed = time.time() - t_start
@@ -824,6 +860,110 @@ def _delete_drug_data(
             logger.warning(f"Milvus 删除药品 '{drug_name}' 向量失败（不影响 MySQL 数据）: {e}")
 
     return len(deleted_doc_ids)
+
+
+# ============================================================
+# v1.0.0: 多源辅助函数
+# ============================================================
+def _build_raw_doc_fields(
+    source_type: str,
+    name: str,
+    raw_content: str,
+    source_file: str,
+    **extra,
+) -> dict:
+    """根据 source_type 构建原始文档插入字段。"""
+    if source_type == "disease":
+        return {
+            "disease_name": name,
+            "disease_category": extra.get("disease_category", ""),
+            "department": extra.get("department", ""),
+            "raw_content": raw_content,
+            "source_type": extra.get("source_subtype", "textbook"),
+            "source_file": source_file,
+        }
+    elif source_type == "guideline":
+        return {
+            "guideline_title": name,
+            "issuing_body": extra.get("issuing_body", ""),
+            "publish_year": extra.get("publish_year", 0),
+            "disease_name": extra.get("disease_name", ""),
+            "department": extra.get("department", ""),
+            "raw_content": raw_content,
+            "source_file": source_file,
+            "url": extra.get("url", ""),
+        }
+    elif source_type == "literature":
+        return {
+            "title": name,
+            "authors": extra.get("authors", ""),
+            "journal": extra.get("journal", ""),
+            "publish_year": extra.get("publish_year", 0),
+            "doi": extra.get("doi", ""),
+            "pmid": extra.get("pmid", ""),
+            "abstract_text": extra.get("abstract_text", ""),
+            "full_text": raw_content,
+            "study_type": extra.get("study_type", ""),
+            "disease_name": extra.get("disease_name", ""),
+            "keywords": extra.get("keywords", ""),
+            "source_file": source_file,
+        }
+    else:
+        return {"unknown": raw_content}
+
+
+def _build_chunk_record(
+    source_type: str,
+    doc_id: int,
+    name: str,
+    chunk,
+    **extra,
+) -> dict:
+    """根据 source_type 构建文本块插入记录。"""
+    # 公共字段
+    record = {
+        "doc_id": doc_id,
+        "section": chunk.section[:100] if chunk.section else None,
+        "chunk_index": chunk.chunk_index,
+        "chunk_text": chunk.chunk_text,
+        "char_count": chunk.char_count,
+    }
+
+    if source_type == "drug":
+        record["drug_name"] = name
+    elif source_type == "disease":
+        record["disease_name"] = name
+        record["source_type"] = extra.get("source_subtype", "textbook")
+        record["evidence_level"] = extra.get("evidence_level", "")
+    elif source_type == "guideline":
+        record["guideline_title"] = name
+        record["disease_name"] = extra.get("disease_name", "")
+        record["evidence_level"] = extra.get("evidence_level", "")
+        record["recommendation_grade"] = extra.get("recommendation_grade", "")
+        record["issuing_body"] = extra.get("issuing_body", "")
+        record["publish_year"] = extra.get("publish_year", 0)
+    elif source_type == "literature":
+        record["title"] = name
+        record["disease_name"] = extra.get("disease_name", "")
+        record["study_type"] = extra.get("study_type", "")
+        record["evidence_level"] = extra.get("evidence_level", "")
+        record["publish_year"] = extra.get("publish_year", 0)
+        record["doi"] = extra.get("doi", "")
+
+    return record
+
+
+def _get_extra_field_2(source_type: str, **extra) -> str:
+    """根据 source_type 返回 extra_field_2 的值。"""
+    if source_type == "drug":
+        return ""
+    elif source_type == "disease":
+        return extra.get("source_subtype", "")
+    elif source_type == "guideline":
+        return extra.get("recommendation_grade", "")
+    elif source_type == "literature":
+        return extra.get("study_type", "")
+    return ""
 
 
 def _finalize_batch(

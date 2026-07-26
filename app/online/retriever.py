@@ -1,16 +1,17 @@
 """
-混合检索器
+混合检索器 (v1.0.0)
 
 融合 Milvus 向量检索（语义相似度）和 MySQL BM25 全文检索（关键词匹配），
 通过 RRF (Reciprocal Rank Fusion) 算法合并结果。
+
+v1.0.0: 支持多源并行检索（drug/disease/guideline/literature）。
 
 使用方式:
     from app.online.retriever import Retriever, SearchResult
 
     retriever = Retriever(milvus_client, mysql_client)
     results = retriever.retrieve("阿司匹林一天吃几次？")
-    for r in results:
-        print(f"[{r.drug_name}][{r.section}] score={r.score:.4f} | {r.chunk_text[:50]}...")
+    multi_results = retriever.multi_source_retrieve("心衰治疗", sources=["drug","disease","guideline","literature"])
 """
 
 import uuid
@@ -155,22 +156,31 @@ class Retriever:
             query_vector = None
 
         # -------------------------------------------------------
-        # 2. 向量检索（Milvus）
+        # 2. 向量检索（Milvus）— v1.0.0 统一 schema 使用 source_name
         # -------------------------------------------------------
         vector_results: list[SearchResult] = []
         if query_vector is not None:
             try:
-                filter_expr = f'drug_name == "{drug_name}"' if drug_name else None
+                # v1.0.0: 兼容新旧 Milvus schema（旧 drug_chunks 用 drug_name，新 collection 用 source_name）
+                output_fields = [
+                    "doc_id", "source_name", "source_type", "section",
+                    "chunk_text", "chunk_index", "extra_field_1", "extra_field_2",
+                    "drug_name",  # 旧 schema 兼容
+                ]
                 milvus_results = self.milvus.search(
                     query_vector=query_vector,
                     top_k=self._vector_top_k,
-                    filter_expr=filter_expr,
+                    filter_expr=None,  # v1.0.0: 不做标量过滤（新旧 schema 字段名不同），由 RRF 融合后处理
+                    output_fields=output_fields,
                 )
                 for r in milvus_results:
                     entity = r.get("entity", {})
+                    # v1.0.0: 兼容新旧 Milvus schema
+                    # 新 schema 用 source_name, 旧 schema 用 drug_name
+                    source_name = entity.get("source_name") or entity.get("drug_name", "")
                     vector_results.append(SearchResult(
                         chunk_text=entity.get("chunk_text", ""),
-                        drug_name=entity.get("drug_name", ""),
+                        drug_name=source_name,
                         section=entity.get("section", ""),
                         score=0.0,  # RRF 阶段再计算
                         doc_id=entity.get("doc_id", 0),
@@ -284,6 +294,179 @@ class Retriever:
         return results
 
     # ----------------------------------------------------------
+    # v1.0.0: 多源检索方法
+    # ----------------------------------------------------------
+    def retrieve_from(
+        self,
+        query: str,
+        source_type: str,
+        top_n: int | None = None,
+    ) -> list[SearchResult]:
+        """
+        从指定 source_type 的 collection 检索。
+
+        Args:
+            query: 查询文本
+            source_type: drug / disease / guideline / literature
+            top_n: 返回 Top-K，默认使用 RRF 融合数
+
+        Returns:
+            SearchResult 列表，带 source_type 标记
+        """
+        if top_n is None:
+            top_n = self._rrf_top_n
+
+        if not query or not query.strip():
+            return []
+
+        request_id = uuid.uuid4().hex[:8]
+        logger.info(f"[{request_id}] 单源检索: source={source_type}, query={query[:60]}...")
+
+        # 1. 查询向量化
+        try:
+            embed_result = self.embedder.embed([query], text_type="query")
+            query_vector = embed_result.embeddings[0] if embed_result.embeddings else None
+        except Exception as e:
+            logger.error(f"[{request_id}] 向量化失败: {e}")
+            query_vector = None
+
+        # 2. 向量检索（Milvus）
+        vector_results: list[SearchResult] = []
+        if query_vector is not None:
+            try:
+                from app.db.milvus_client import MilvusClient
+                collection_name = f"{source_type}_chunks"
+                mc = MilvusClient(collection_name=collection_name)
+                mc.connect()
+                milvus_results = mc.search(
+                    query_vector=query_vector,
+                    top_k=self._vector_top_k,
+                )
+                mc.disconnect()
+                for r in milvus_results:
+                    entity = r.get("entity", {})
+                    vector_results.append(SearchResult(
+                        chunk_text=entity.get("chunk_text", ""),
+                        drug_name=entity.get("source_name", entity.get("drug_name", "")),
+                        section=entity.get("section", ""),
+                        score=0.0,
+                        doc_id=entity.get("doc_id", 0),
+                        chunk_index=entity.get("chunk_index", 0),
+                        source="vector",
+                    ))
+            except Exception as e:
+                logger.error(f"[{request_id}] {source_type} 向量检索失败: {e}")
+
+        # 3. BM25 检索（MySQL）
+        bm25_results: list[SearchResult] = []
+        try:
+            bm25_raw = self.mysql.bm25_search_generic(
+                source_type=source_type,
+                query=query,
+                top_k=self._bm25_top_k,
+            )
+            for r in bm25_raw:
+                bm25_results.append(SearchResult(
+                    chunk_text=r.get("chunk_text", ""),
+                    drug_name=r.get("drug_name", r.get("disease_name",
+                               r.get("guideline_title", r.get("title", "")))),
+                    section=r.get("section", ""),
+                    score=0.0,
+                    doc_id=r.get("doc_id", 0),
+                    chunk_index=r.get("chunk_index", 0),
+                    source="bm25",
+                ))
+        except Exception as e:
+            logger.error(f"[{request_id}] {source_type} BM25 检索失败: {e}")
+
+        # 4. RRF 融合
+        if not vector_results and not bm25_results:
+            return []
+
+        fused = self._rrf_fusion(vector_results, bm25_results, top_n)
+        # 标记 source_type
+        for r in fused:
+            r.source = f"{source_type}_{r.source}"
+
+        return fused
+
+    def multi_source_retrieve(
+        self,
+        query: str,
+        sources: list[str] | None = None,
+        top_n_per_source: int = 5,
+        final_top_n: int = 15,
+    ) -> list[dict]:
+        """
+        多源并行检索 + 跨源 RRF 融合。
+
+        Args:
+            query: 查询文本
+            sources: 要检索的 source 列表，默认全部 4 个
+                     ["drug", "disease", "guideline", "literature"]
+            top_n_per_source: 每个源取 Top-N
+            final_top_n: 跨源融合后最终取 N 条
+
+        Returns:
+            带 source_type 标记的检索结果字典列表
+        """
+        if sources is None:
+            sources = ["drug", "disease", "guideline", "literature"]
+
+        request_id = uuid.uuid4().hex[:8]
+        logger.info(
+            f"[{request_id}] 多源检索开始: sources={sources}, "
+            f"query={query[:80]}..."
+        )
+
+        all_results: list[SearchResult] = []
+
+        for source_type in sources:
+            try:
+                results = self.retrieve_from(query, source_type, top_n=top_n_per_source)
+                # 在 chunk_text 层面标记 source_type（后续 dedup 保留）
+                all_results.extend(results)
+                logger.info(
+                    f"[{request_id}] {source_type}: {len(results)} 条"
+                )
+            except Exception as e:
+                logger.error(f"[{request_id}] {source_type} 检索失败（跳过）: {e}")
+                continue
+
+        if not all_results:
+            logger.warning(f"[{request_id}] 所有 source 均无检索结果")
+            return []
+
+        # 按 (doc_id, source_type, chunk_text[:100]) 去重
+        from dataclasses import asdict
+
+        seen = set()
+        unique_results: list[dict] = []
+        for r in all_results:
+            r_dict = asdict(r)
+            # 提取 source_type 从 source 字段
+            st = "unknown"
+            for s in sources:
+                if r.source.startswith(s):
+                    st = s
+                    break
+            r_dict["source_type"] = st
+            key = (r_dict.get("doc_id"), st, r_dict.get("chunk_text", "")[:100])
+            if key not in seen:
+                seen.add(key)
+                unique_results.append(r_dict)
+
+        # Phase 1 风格：按 score 降序排列，每种 source 至少保留 2 条
+        balanced = _balanced_sample(unique_results, per_source_min=2, total_max=final_top_n)
+
+        logger.info(
+            f"[{request_id}] 多源检索完成: {len(balanced)} 条 "
+            f"(原始 {len(unique_results)} 条去重后)"
+        )
+
+        return balanced
+
+    # ----------------------------------------------------------
     # 便捷方法
     # ----------------------------------------------------------
     def retrieve_top_docs(
@@ -355,3 +538,54 @@ class Retriever:
 
     def __exit__(self, *args) -> None:
         self.close()
+
+
+# ============================================================
+# v1.0.0: 均衡采样辅助函数
+# ============================================================
+def _balanced_sample(
+    results: list[dict],
+    per_source_min: int = 2,
+    total_max: int = 15,
+) -> list[dict]:
+    """
+    跨源均衡采样：每种 source_type 至少保留 per_source_min 条，总数不超过 total_max。
+
+    策略:
+    1. 先按 source_type 分组
+    2. 每组取 top per_source_min 条（按 score 降序）
+    3. 剩余名额按各组剩余结果数比例分配
+    """
+    from collections import defaultdict
+
+    groups: dict[str, list[dict]] = defaultdict(list)
+    for r in results:
+        st = r.get("source_type", "unknown")
+        groups[st].append(r)
+
+    # 各组内按 score 降序
+    for st in groups:
+        groups[st].sort(key=lambda x: x.get("score", 0.0), reverse=True)
+
+    selected: list[dict] = []
+
+    # 第一轮：每种至少 per_source_min 条
+    for st, items in groups.items():
+        selected.extend(items[:per_source_min])
+
+    # 如果已经超过 total_max，截断
+    if len(selected) >= total_max:
+        selected.sort(key=lambda x: x.get("score", 0.0), reverse=True)
+        return selected[:total_max]
+
+    # 第二轮：从各组取剩余
+    remaining_slots = total_max - len(selected)
+    remaining_pool = []
+    for st, items in groups.items():
+        remaining_pool.extend(items[per_source_min:])
+
+    remaining_pool.sort(key=lambda x: x.get("score", 0.0), reverse=True)
+    selected.extend(remaining_pool[:remaining_slots])
+
+    selected.sort(key=lambda x: x.get("score", 0.0), reverse=True)
+    return selected

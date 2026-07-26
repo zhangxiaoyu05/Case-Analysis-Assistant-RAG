@@ -1,13 +1,16 @@
 #!/usr/bin/env python
 
 """
-Milvus 初始化脚本
+Milvus 初始化脚本 (v1.0.0)
 
-创建 drug_chunks Collection 并构建 IVF_FLAT 索引。
+创建 4 个 Collection（drug_chunks / disease_chunks / guideline_chunks / literature_chunks）
+并构建 IVF_FLAT 索引。使用统一 schema。
 
 使用方式:
-    python scripts/init_milvus.py                # 首次创建（已存在则跳过）
-    python scripts/init_milvus.py --force        # 强制重建（删除已有 Collection）
+    python scripts/init_milvus.py                        # 首次创建全部 4 个（已存在则跳过）
+    python scripts/init_milvus.py --force                 # 强制重建全部 4 个
+    python scripts/init_milvus.py --force --collections drug,disease  # 只重建指定
+    python scripts/init_milvus.py --collections drug       # 只创建 drug
 """
 
 import argparse
@@ -23,35 +26,61 @@ from app.config import config
 from app.db.milvus_client import MilvusClient
 
 
-def init_milvus(force: bool = False) -> bool:
+ALL_COLLECTIONS = ["drug_chunks", "disease_chunks", "guideline_chunks", "literature_chunks"]
+
+
+def init_milvus(force: bool = False, collections: list[str] | None = None) -> bool:
     """
-    初始化 Milvus Collection 和索引
+    初始化 Milvus Collection 和索引。
 
     Args:
         force: 如果为 True，已有 Collection 时先删除再重建
+        collections: 要初始化的 collection 列表，None 表示全部 4 个
 
     Returns:
         True 表示初始化成功
     """
+    targets = collections or ALL_COLLECTIONS
+
     logger.info("=" * 60)
-    logger.info("Milvus 初始化开始")
+    logger.info("Milvus 初始化开始 (v1.0.0)")
     logger.info(f"连接地址: {config.MILVUS_HOST}:{config.MILVUS_PORT}")
-    logger.info(f"Collection: {config.milvus_collection_name}")
+    logger.info(f"目标 Collection: {targets}")
     logger.info(f"维度: {config.milvus_dimension}")
     logger.info(f"索引类型: {config.milvus_index_type} (nlist={config.milvus_nlist})")
     logger.info(f"度量类型: {config.milvus_metric_type}")
     logger.info("=" * 60)
 
-    client = MilvusClient()
+    all_ok = True
+    for collection_name in targets:
+        try:
+            ok = _init_one_collection(collection_name, force)
+            if not ok:
+                all_ok = False
+        except Exception as e:
+            logger.error(f"❌ {collection_name} 初始化失败: {e}")
+            all_ok = False
+
+    if all_ok:
+        logger.info("\n✅ 所有 Milvus Collection 初始化完成")
+    else:
+        logger.warning("\n⚠️ 部分 Collection 初始化失败，请检查上述错误信息")
+
+    return all_ok
+
+
+def _init_one_collection(collection_name: str, force: bool) -> bool:
+    """初始化单个 Collection。"""
+    client = MilvusClient(collection_name=collection_name)
     client.connect()
 
     try:
         if force and client.collection_exists():
-            logger.warning("--force 模式：删除已有 Collection")
+            logger.warning(f"--force 模式：删除已有 Collection '{collection_name}'")
             client.drop_collection()
 
         if client.collection_exists():
-            logger.info(f"Collection '{config.milvus_collection_name}' 已存在，跳过创建")
+            logger.info(f"Collection '{collection_name}' 已存在，跳过创建")
         else:
             client.create_collection(drop_if_exists=False)
 
@@ -60,19 +89,11 @@ def init_milvus(force: bool = False) -> bool:
 
         # 打印 Collection 信息
         info = client.get_collection_info()
-        logger.info(f"\nCollection 详情:")
-        logger.info(f"  名称: {info['name']}")
-        logger.info(f"  行数: {info['row_count']}")
-        logger.info(f"  字段:")
-        for field in info.get("fields", []):
-            logger.info(f"    - {field['name']} ({field['type']})")
-        logger.info(f"  描述: {info['description']}")
+        logger.info(f"  {collection_name}: {info['row_count']} 行, {len(info.get('fields', []))} 字段")
 
-        logger.info("\n✅ Milvus 初始化完成")
         return True
-
     except Exception as e:
-        logger.error(f"❌ Milvus 初始化失败: {e}")
+        logger.error(f"  {collection_name}: ❌ {e}")
         return False
     finally:
         client.disconnect()
@@ -87,9 +108,20 @@ def main() -> None:
         action="store_true",
         help="强制重建：如果 Collection 已存在则先删除",
     )
+    parser.add_argument(
+        "--collections",
+        type=str,
+        default=None,
+        help="要初始化的 Collection，逗号分隔。默认全部。"
+             "可选: drug,disease,guideline,literature",
+    )
     args = parser.parse_args()
 
-    success = init_milvus(force=args.force)
+    collections = None
+    if args.collections:
+        collections = [f"{c.strip()}_chunks" for c in args.collections.split(",")]
+
+    success = init_milvus(force=args.force, collections=collections)
     sys.exit(0 if success else 1)
 
 

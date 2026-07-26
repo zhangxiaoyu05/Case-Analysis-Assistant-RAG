@@ -1,16 +1,18 @@
 """
 答案生成模块
 
-使用 DashScope Generation API 基于检索到的参考资料生成药品知识回答。
-支持多种回答场景：默认问答、药品对比、用法用量追问。
+v1.0.0: 从药品问答改造为病例分析，支持 5 种临床模板 + case_profile + synthesized_context。
 
 使用方式:
     from app.online.generator import Generator, GeneratedAnswer
 
     generator = Generator()
     result = generator.generate(
-        query="阿司匹林一天吃几次？",
+        query="请分析这个病例的诊疗方案",
         context_docs=[...],
+        case_profile={...},
+        synthesized_context={...},
+        analysis_mode="treatment",
     )
     print(result.answer)
 """
@@ -49,7 +51,7 @@ class GeneratedAnswer:
 
     answer: str
     sources: list[dict] = field(default_factory=list)
-    template_used: str = "default"  # 使用的提示词模板
+    template_used: str = "case_summary"  # 使用的提示词模板
     token_count: Optional[int] = None  # 实际消耗 token（API 返回时填充）
 
 
@@ -58,18 +60,20 @@ class GeneratedAnswer:
 # ============================================================
 class Generator:
     """
-    基于检索结果生成药品知识回答。
+    基于检索结果生成临床病例分析回答。
 
     使用 DashScope Generation API (qwen3-max) + 场景化提示词模板。
+    支持 5 种模板: case_summary / differential_diagnosis / treatment_analysis /
+                 drug_review / guideline_lookup
 
     使用方式:
         generator = Generator()
         result = generator.generate(
-            query="阿司匹林和布洛芬有什么区别？",
-            context_docs=[
-                {"drug_name": "阿司匹林", "section": "适应症", "chunk_text": "..."},
-                {"drug_name": "布洛芬", "section": "适应症", "chunk_text": "..."},
-            ],
+            query="请分析诊疗方案",
+            context_docs=[...],
+            case_profile={...},
+            synthesized_context={...},
+            analysis_mode="treatment",
         )
     """
 
@@ -115,53 +119,61 @@ class Generator:
         memory_summary: str = "",
         user_memories: str = "",
         user_profile: str = "",
+        case_profile: dict | None = None,
+        synthesized_context: dict | None = None,
+        analysis_mode: str = "",
     ) -> GeneratedAnswer:
         """
-        生成药品知识回答。
+        生成临床病例分析回答。
 
         Args:
             query: 用户问题
-            context_docs: 检索到的参考文档列表，每项为 dict，需包含:
-                - drug_name: 药品名
-                - section: 章节
-                - chunk_text: 文本内容
-                - score (可选): 相关性得分
-            history: 对话历史 [{"role": "user/assistant", "content": "..."}]
-            template: 指定提示词模板（"default" / "comparison" / "dosage_followup"）
-                      不传则自动检测
-            memory_summary: 早期对话的累积摘要（Phase 1 短期记忆）
-            user_memories: 跨会话用户中期记忆文本（Phase 2）
-            user_profile: 用户画像文本（Phase 3 长期记忆）
+            context_docs: 检索到的参考文档列表
+            history: 对话历史
+            template: 指定提示词模板（不传则自动检测）
+            memory_summary: 早期对话的累积摘要
+            user_memories: 跨会话用户中期记忆文本
+            user_profile: 用户画像文本
+            case_profile: 结构化病例信息 dict
+            synthesized_context: 按维度组织的多源上下文 dict
+            analysis_mode: 分析模式（comprehensive/diagnosis/treatment/drug_review）
 
         Returns:
-            GeneratedAnswer — answer 为生成的回答文本
+            GeneratedAnswer
         """
         request_id = uuid.uuid4().hex[:8]
 
         if not query or not query.strip():
             logger.warning("空查询，无法生成回答")
             return GeneratedAnswer(
-                answer="请提出一个具体的药品相关问题。",
-                template_used=template or "default",
+                answer="请提出一个具体的临床病例相关问题。",
+                template_used=template or "case_summary",
             )
+
+        case_profile = case_profile or {}
+        synthesized_context = synthesized_context or {}
 
         # 自动检测合适的模板
         if template is None:
-            template = self._detect_template(query, history)
+            template = self._detect_template(query, case_profile, analysis_mode)
 
         # 格式化上下文文本
         context_text = self._format_context(context_docs)
+        case_profile_text = self._format_case_profile(case_profile)
+        synthesized_text = self._format_synthesized_context(synthesized_context)
 
         # 构建 system + user messages
         system_prompt = self._get_system_prompt(template)
         user_prompt = self._get_user_prompt(
-            template, context_text, query, history, memory_summary, user_memories, user_profile
+            template, context_text, query, history,
+            memory_summary, user_memories, user_profile,
+            case_profile_text, synthesized_text,
         )
 
         logger.info(
             f"[{request_id}] 开始生成回答: query={query[:60]}..., "
             f"template={template}, docs={len(context_docs)}, "
-            f"context_len={len(context_text)}"
+            f"context_len={len(context_text)}, mode={analysis_mode}"
         )
 
         try:
@@ -196,31 +208,44 @@ class Generator:
     # 模板检测
     # ----------------------------------------------------------
     @staticmethod
-    def _detect_template(query: str, history: list[dict] | None = None) -> str:
+    def _detect_template(
+        query: str,
+        case_profile: dict | None = None,
+        analysis_mode: str = "",
+    ) -> str:
         """
         自动检测最合适的提示词模板。
 
-        检测规则:
-        - 如果存在对话历史且 user 消息 ≥ 2 条 → dosage_followup
-        - 如果查询包含对比/比较/区别关键词 → comparison
-        - 否则 → default
+        优先级：analysis_mode > 关键词检测 > 默认
         """
-        # 追问检测
-        if history and len([h for h in history if h.get("role") == "user"]) >= 1:
-            return "dosage_followup"
+        # 分析模式优先
+        mode_map = {
+            "comprehensive": "case_summary",
+            "diagnosis": "differential_diagnosis",
+            "treatment": "treatment_analysis",
+            "drug_review": "drug_review",
+        }
+        if analysis_mode in mode_map:
+            return mode_map[analysis_mode]
 
-        # 对比检测
-        comparison_patterns = [
-            r"(对比|比较|区别|差别|差异|哪个|哪种|vs|VS)",
-            r"(有什么不同|有何不同|有什么不一样|有什么区别)",
-            r"(可以一起吃|能一起吃|可以同时|能同时)",
-            r"(还是哪个|还是哪种|哪个更好|哪种更好)",
-        ]
-        for pattern in comparison_patterns:
-            if re.search(pattern, query):
-                return "comparison"
+        # 关键词检测 — 鉴别诊断
+        if any(kw in query for kw in ["鉴别诊断", "可能是什么病", "诊断是什么", "鉴别", "区别"]):
+            return "differential_diagnosis"
 
-        return "default"
+        # 关键词检测 — 治疗方案
+        if any(kw in query for kw in ["治疗", "方案", "用药", "怎么治", "如何处理", "管理"]):
+            return "treatment_analysis"
+
+        # 关键词检测 — 用药审查
+        if any(kw in query for kw in ["药物", "审查", "相互作用", "剂量", "不良反应", "副作用"]):
+            return "drug_review"
+
+        # 关键词检测 — 指南查询
+        if any(kw in query for kw in ["指南", "推荐", "共识", "循证", "证据"]):
+            return "guideline_lookup"
+
+        # 默认：综合分析
+        return "case_summary"
 
     # ----------------------------------------------------------
     # 上下文格式化
@@ -231,28 +256,136 @@ class Generator:
         将检索到的文档列表格式化为 prompt 中的参考资料文本。
 
         格式:
-            [来源1]
+            [来源1] 类型: drug
             药品名称: 阿司匹林
             章节: 用法用量
-            内容: 口服。成人常用量：一次0.3～0.6g...
+            内容: ...
         """
         if not docs:
             return "（未检索到相关参考资料）"
 
         parts: list[str] = []
         for i, doc in enumerate(docs, start=1):
-            drug = doc.get("drug_name", "未知药品")
+            source_type = doc.get("source_type", "drug")
+            disease_name = doc.get("disease_name", "")
+            drug_name = doc.get("drug_name", "")
+            guideline_title = doc.get("guideline_title", "")
             section = doc.get("section", "")
             text = doc.get("chunk_text", "")
+            evidence_level = doc.get("evidence_level", "")
+
+            # 构建标题行
+            name_parts = []
+            if drug_name:
+                name_parts.append(f"药品: {drug_name}")
+            if disease_name:
+                name_parts.append(f"疾病: {disease_name}")
+            if guideline_title:
+                name_parts.append(f"指南: {guideline_title}")
+            name_str = " / ".join(name_parts) if name_parts else "未知来源"
 
             section_str = f"\n章节: {section}" if section else ""
+            evidence_str = f"\n证据级别: {evidence_level}" if evidence_level else ""
+            type_str = f"\n来源类型: {source_type}"
+
             parts.append(
                 f"[来源{i}]\n"
-                f"药品名称: {drug}{section_str}\n"
+                f"{name_str}{section_str}{type_str}{evidence_str}\n"
                 f"内容: {text}"
             )
 
         return "\n\n".join(parts)
+
+    @staticmethod
+    def _format_case_profile(profile: dict) -> str:
+        """将结构化病例信息格式化为可读文本。"""
+        if not profile:
+            return "（未提供病例信息）"
+
+        lines = []
+        if profile.get("chief_complaint"):
+            lines.append(f"主诉: {profile['chief_complaint']}")
+        if profile.get("present_illness"):
+            lines.append(f"现病史: {profile['present_illness']}")
+        if profile.get("past_history"):
+            lines.append(f"既往史: {profile['past_history']}")
+        if profile.get("family_history"):
+            lines.append(f"家族史: {profile['family_history']}")
+        if profile.get("physical_exam"):
+            lines.append(f"体格检查: {profile['physical_exam']}")
+
+        # 实验室检查
+        lab_results = profile.get("lab_results", [])
+        if lab_results:
+            lines.append("辅助检查:")
+            for lab in lab_results:
+                if isinstance(lab, dict):
+                    name = lab.get("name", "")
+                    value = lab.get("value", "")
+                    ref = lab.get("reference", "")
+                    ref_str = f"（参考范围: {ref}）" if ref else ""
+                    lines.append(f"  - {name}: {value} {ref_str}")
+
+        # 当前用药
+        meds = profile.get("current_medications", [])
+        if meds:
+            lines.append("当前用药:")
+            for med in meds:
+                if isinstance(med, dict):
+                    details = f"{med.get('dosage','')} {med.get('frequency','')} {med.get('route','')}"
+                    lines.append(f"  - {med.get('name','')}: {details.strip()}")
+
+        if profile.get("suspected_diagnosis"):
+            diags = profile["suspected_diagnosis"]
+            if isinstance(diags, list):
+                lines.append(f"疑似诊断: {', '.join(diags)}")
+            else:
+                lines.append(f"疑似诊断: {diags}")
+
+        if profile.get("key_abnormalities"):
+            lines.append(f"关键异常: {', '.join(profile['key_abnormalities'])}")
+
+        return "\n".join(lines) if lines else "（未提供病例信息）"
+
+    @staticmethod
+    def _format_synthesized_context(ctx: dict) -> str:
+        """将多源合成的上下文格式化为 prompt 可用的文本。"""
+        if not ctx:
+            return "（无可用的参考资料）"
+
+        parts = []
+        labels = {
+            "disease": "📋 疾病相关知识",
+            "guideline": "📜 临床指南",
+            "drug": "💊 药品信息",
+            "literature": "📄 循证文献",
+        }
+
+        for source_type in ["disease", "guideline", "drug", "literature"]:
+            docs = ctx.get(source_type, [])
+            if not docs:
+                continue
+            label = labels.get(source_type, source_type)
+            parts.append(f"\n### {label}")
+            for i, doc in enumerate(docs[:5], start=1):  # 每种最多 5 条
+                name = (
+                    doc.get("drug_name")
+                    or doc.get("disease_name")
+                    or doc.get("guideline_title")
+                    or ""
+                )
+                section = doc.get("section", "")
+                text = doc.get("chunk_text", "")
+                evidence = doc.get("evidence_level", "")
+                name_str = f" ({name})" if name else ""
+                section_str = f" [{section}]" if section else ""
+                evidence_str = f" [证据级别: {evidence}]" if evidence else ""
+                parts.append(
+                    f"{i}.{name_str}{section_str}{evidence_str}\n"
+                    f"   {text[:500]}"
+                )
+
+        return "\n".join(parts) if parts else "（无可用的参考资料）"
 
     # ----------------------------------------------------------
     # 提示词构建
@@ -261,13 +394,14 @@ class Generator:
     def _get_system_prompt(template: str) -> str:
         """获取指定模板的 system prompt"""
         template_map = {
-            "default": "default",
-            "comparison": "comparison",
-            "dosage_followup": "dosage_followup",
-            "general": "general",
+            "case_summary": "case_summary",
+            "differential_diagnosis": "differential_diagnosis",
+            "treatment_analysis": "treatment_analysis",
+            "drug_review": "drug_review",
+            "guideline_lookup": "guideline_lookup",
         }
-        key = template_map.get(template, "default")
-        prompt_config = _CHAT_PROMPTS.get(key, _CHAT_PROMPTS["default"])
+        key = template_map.get(template, "case_summary")
+        prompt_config = _CHAT_PROMPTS.get(key, _CHAT_PROMPTS["case_summary"])
         return prompt_config["system"]
 
     def _get_user_prompt(
@@ -279,38 +413,47 @@ class Generator:
         memory_summary: str = "",
         user_memories: str = "",
         user_profile: str = "",
+        case_profile_text: str = "",
+        synthesized_text: str = "",
     ) -> str:
         """获取指定模板的 user prompt（填充变量）"""
         template_map = {
-            "default": "default",
-            "comparison": "comparison",
-            "dosage_followup": "dosage_followup",
-            "general": "general",
+            "case_summary": "case_summary",
+            "differential_diagnosis": "differential_diagnosis",
+            "treatment_analysis": "treatment_analysis",
+            "drug_review": "drug_review",
+            "guideline_lookup": "guideline_lookup",
         }
-        key = template_map.get(template, "default")
-        prompt_config = _CHAT_PROMPTS.get(key, _CHAT_PROMPTS["default"])
+        key = template_map.get(template, "case_summary")
+        prompt_config = _CHAT_PROMPTS.get(key, _CHAT_PROMPTS["case_summary"])
         template_text = prompt_config["user"]
 
-        # 格式化近期对话历史（所有模板都注入）
+        # 格式化近期对话历史
         history_text = ""
         if history:
             history_parts: list[str] = []
-            for turn in history[-6:]:  # 最多保留最近 6 条
+            for turn in history[-6:]:
                 role = "用户" if turn.get("role") == "user" else "助手"
                 content = turn.get("content", "")
                 history_parts.append(f"{role}: {content}")
             history_text = "近期对话：\n" + "\n".join(history_parts)
 
-        # 格式化记忆摘要（短期记忆）
+        # 格式化记忆摘要
         memory_text = ""
         if memory_summary:
             memory_text = f"前序对话摘要：\n{memory_summary}\n"
 
-        # 中期记忆文本直接使用（UserMemoryManager 已格式化）
+        # 中期记忆文本
         user_memories_text = user_memories or ""
 
-        # 用户画像文本直接使用（UserProfileManager 已格式化）
+        # 用户画像文本
         user_profile_text = user_profile or ""
+
+        # 病例信息文本
+        case_text = case_profile_text or "（未提供病例信息）"
+
+        # 合成上下文文本
+        synth_text = synthesized_text or context
 
         # 填充模板变量
         return template_text.format(
@@ -320,6 +463,8 @@ class Generator:
             memory_summary=memory_text,
             user_memories=user_memories_text,
             user_profile=user_profile_text,
+            case_profile=case_text,
+            synthesized_context=synth_text,
         )
 
     # ----------------------------------------------------------
@@ -354,7 +499,7 @@ class Generator:
             max_tokens=self._max_tokens,
             top_p=self._top_p,
             api_key=self._api_key,
-            result_format="message",  # 使用 chat 格式返回 choices
+            result_format="message",
         )
 
         if response.status_code != 200:
@@ -369,7 +514,6 @@ class Generator:
         if output is None:
             raise RuntimeError("DashScope Generation API 返回了空的 output")
 
-        # DashScope 新版本可能返回 choices 或 text 两种格式
         if output.choices:
             content = output.choices[0].message.content
         elif output.text:
@@ -394,34 +538,45 @@ class Generator:
         memory_summary: str = "",
         user_memories: str = "",
         user_profile: str = "",
+        case_profile: dict | None = None,
+        synthesized_context: dict | None = None,
+        analysis_mode: str = "",
     ):
         """
         流式版本：逐 token yield 生成结果（用于 SSE）。
-
-        调用 DashScope Generation API with stream=True + incremental_output=True，
-        逐个产出文本 token。
 
         Args:
             query: 用户问题
             context_docs: 检索到的参考文档列表
             history: 对话历史
             template: 提示词模板（不传则自动检测）
-            memory_summary: 早期对话的累积摘要（Phase 1）
-            user_memories: 跨会话用户中期记忆文本（Phase 2）
-            user_profile: 用户画像文本（Phase 3 长期记忆）
+            memory_summary: 早期对话的累积摘要
+            user_memories: 跨会话用户中期记忆文本
+            user_profile: 用户画像文本
+            case_profile: 结构化病例信息 dict
+            synthesized_context: 按维度组织的多源上下文 dict
+            analysis_mode: 分析模式
 
         Yields:
             str — 每次产出一个增量 token 文本
         """
         from dashscope import Generation
 
+        case_profile = case_profile or {}
+        synthesized_context = synthesized_context or {}
+
         if template is None:
-            template = self._detect_template(query, history)
+            template = self._detect_template(query, case_profile, analysis_mode)
 
         context_text = self._format_context(context_docs)
+        case_profile_text = self._format_case_profile(case_profile)
+        synthesized_text = self._format_synthesized_context(synthesized_context)
+
         system_prompt = self._get_system_prompt(template)
         user_prompt = self._get_user_prompt(
-            template, context_text, query, history, memory_summary, user_memories, user_profile
+            template, context_text, query, history,
+            memory_summary, user_memories, user_profile,
+            case_profile_text, synthesized_text,
         )
 
         messages = [
@@ -431,7 +586,7 @@ class Generator:
 
         logger.info(
             f"开始流式生成: query={query[:60]}..., template={template}, "
-            f"docs={len(context_docs)}"
+            f"docs={len(context_docs)}, mode={analysis_mode}"
         )
 
         response = Generation.call(
@@ -443,7 +598,7 @@ class Generator:
             api_key=self._api_key,
             stream=True,
             incremental_output=True,
-            result_format="message",  # 使用 chat 格式返回 choices
+            result_format="message",
         )
 
         token_count = 0
@@ -458,7 +613,6 @@ class Generator:
             if output is None:
                 continue
 
-            # DashScope 新版本可能返回 choices 或 text 两种格式
             if output.choices:
                 content = output.choices[0].message.content
             elif output.text:
@@ -482,6 +636,8 @@ def generate_answer(
     history: list[dict] | None = None,
     template: str | None = None,
     memory_summary: str = "",
+    case_profile: dict | None = None,
+    synthesized_context: dict | None = None,
 ) -> GeneratedAnswer:
     """
     便捷函数：一行调用生成回答。
@@ -492,6 +648,8 @@ def generate_answer(
         history: 对话历史（可选）
         template: 提示词模板（可选，默认自动检测）
         memory_summary: 早期对话的累积摘要（可选）
+        case_profile: 结构化病例信息（可选）
+        synthesized_context: 多源合成上下文（可选）
 
     Returns:
         GeneratedAnswer
@@ -503,4 +661,6 @@ def generate_answer(
         history=history,
         template=template,
         memory_summary=memory_summary,
+        case_profile=case_profile,
+        synthesized_context=synthesized_context,
     )

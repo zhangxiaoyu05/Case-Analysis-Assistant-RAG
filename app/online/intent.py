@@ -1,15 +1,24 @@
 """
-意图识别模块
+门禁模块（Gatekeeper）
 
-判断用户问题是否属于药品知识领域，用于过滤无关问题和路由决策。
+二元判断用户问题是否与临床医学/病例分析相关。与临床无关的问题全部拦截，
+不再区分 chitchat / general / attack 子类。
+
+问候白名单由 intent_node 在调用 Gatekeeper 之前单独处理。
+
+v1.0.0: drug_related → clinical_related，关键词从药品扩展为临床医学。
 
 使用方式:
-    from app.online.intent import IntentClassifier, IntentResult
+    from app.online.intent import Gatekeeper, GateResult, is_greeting
 
-    classifier = IntentClassifier()
-    result = classifier.classify("阿司匹林一天吃几次？")
-    if result.intent == "drug_inquiry":
-        print(f"药品问题，置信度: {result.confidence}")
+    if is_greeting(query):
+        # 友好回应
+        ...
+    else:
+        gk = Gatekeeper()
+        result = gk.classify("患者男65岁，高血压10年，胸闷气短...")
+        if result.clinical_related:
+            print(f"临床问题，置信度: {result.confidence}")
 """
 
 import json
@@ -22,40 +31,69 @@ from loguru import logger
 
 from app.config import config
 
-# 加载 prompts.yaml 中的意图识别模板
+# 加载 prompts.yaml 中的门禁模板
 _PROMPTS_PATH = Path(__file__).resolve().parent.parent.parent / "config" / "prompts.yaml"
 with open(_PROMPTS_PATH, "r", encoding="utf-8") as _f:
     _PROMPTS = yaml.safe_load(_f)
 
-_INTENT_SYSTEM = _PROMPTS["intent"]["system"]
-_INTENT_FEW_SHOT = _PROMPTS["intent"]["few_shot_examples"]
+_GATEKEEPER_SYSTEM = _PROMPTS["gatekeeper"]["system"]
+_GATEKEEPER_FEW_SHOT = _PROMPTS["gatekeeper"]["few_shot_examples"]
+
+# ============================================================
+# 问候白名单（供 intent_node 调用，不走门禁 LLM）
+# ============================================================
+_GREETING_PATTERNS = [
+    r"^(你好|您好|hi|hello|嗨|喂|在吗|在不在|有人在吗)[\s!！。.,，]*$",
+    r"^(谢谢|感谢|多谢|thanks|thank you|3q)[\s!！。.,，]*$",
+    r"^(早上好|下午好|晚上好|早安|晚安|中午好)[\s!！。.,，]*$",
+    r"^(好的|ok|OK|嗯|哦|知道了|明白了)[\s!！。.,，]*$",
+]
+
+
+def is_greeting(query: str) -> bool:
+    """
+    判断用户输入是否为日常问候/闲聊。
+
+    由 intent_node 在调用 Gatekeeper 之前使用，
+    命中则直接路由到 chitchat_node 返回友好回应。
+    """
+    query_stripped = query.strip()
+    for pattern in _GREETING_PATTERNS:
+        if re.search(pattern, query_stripped, re.IGNORECASE):
+            return True
+    return False
 
 
 # ============================================================
 # 数据类
 # ============================================================
 @dataclass
-class IntentResult:
-    """意图识别结果"""
+class GateResult:
+    """门禁判断结果"""
 
-    intent: str  # "drug_inquiry" | "chitchat" | "general" | "attack"
+    clinical_related: bool  # True = 临床医学相关，放行；False = 拦截
     confidence: float  # 0.0 ~ 1.0
 
+    # 向后兼容别名
+    @property
+    def drug_related(self) -> bool:
+        return self.clinical_related
+
 
 # ============================================================
-# IntentClassifier
+# Gatekeeper
 # ============================================================
-class IntentClassifier:
+class Gatekeeper:
     """
-    药品问题意图分类器。
+    临床医学门禁。
 
-    使用 DashScope Generation API + intent 提示词模板
-    判断用户问题是否属于药品知识领域。
+    使用 DashScope Generation API + gatekeeper 提示词模板
+    二元判断用户问题是否与临床医学/病例分析相关。
 
     使用方式:
-        classifier = IntentClassifier()
-        result = classifier.classify("布洛芬可以和酒精一起用吗？")
-        print(result.intent)  # "drug_inquiry"
+        gk = Gatekeeper()
+        result = gk.classify("患者胸闷气短3天，既往高血压史，如何诊治？")
+        print(result.clinical_related)  # True
     """
 
     def __init__(
@@ -66,7 +104,7 @@ class IntentClassifier:
         api_key: str | None = None,
     ) -> None:
         """
-        初始化意图分类器。
+        初始化门禁。
 
         Args:
             model: 模型名（默认 config.intent_model = qwen-flash）
@@ -85,27 +123,27 @@ class IntentClassifier:
             )
         if not self._api_key:
             raise ValueError(
-                "DASHSCOPE_API_KEY 未配置。请设置环境变量或在初始化 IntentClassifier 时传入 api_key。"
+                "DASHSCOPE_API_KEY 未配置。请设置环境变量或在初始化 Gatekeeper 时传入 api_key。"
             )
 
-    def classify(self, query: str) -> IntentResult:
+    def classify(self, query: str) -> GateResult:
         """
-        对用户问题执行意图分类。
+        判断用户问题是否与临床医学相关。
 
         Args:
             query: 用户问题文本
 
         Returns:
-            IntentResult — intent 为 "drug_inquiry" 或 "other"，confidence 为置信度
+            GateResult — clinical_related=True 放行，False 拦截
         """
         if not query or not query.strip():
-            logger.warning("收到空查询，返回 drug_inquiry 默认意图")
-            return IntentResult(intent="drug_inquiry", confidence=0.3)
+            logger.warning("收到空查询，默认放行")
+            return GateResult(clinical_related=True, confidence=0.3)
 
-        # 快速预判：明显的非药品问题直接返回
-        quick_check = self._quick_classify(query)
-        if quick_check is not None:
-            return quick_check
+        # 快速预判：明显的临床医学信号词直接放行
+        quick = self._quick_classify(query)
+        if quick is not None:
+            return quick
 
         # 构造消息
         messages = self._build_messages(query)
@@ -115,123 +153,71 @@ class IntentClassifier:
             return self._parse_response(response_text)
 
         except Exception as e:
-            logger.warning(f"意图识别 API 调用失败: {e}，默认视为药品问题")
-            return IntentResult(intent="drug_inquiry", confidence=0.5)
+            logger.warning(f"门禁 API 调用失败: {e}，默认放行（保证可用性）")
+            return GateResult(clinical_related=True, confidence=0.5)
 
     # ----------------------------------------------------------
     # 内部方法
     # ----------------------------------------------------------
-    def _quick_classify(self, query: str) -> IntentResult | None:
+    def _quick_classify(self, query: str) -> GateResult | None:
         """
-        快速预判：基于关键词/模式的启发式分类。
+        快速预判：基于关键词的启发式分类。
         返回 None 表示无法快速判断，需走 LLM 流程。
+
+        注意：问候白名单由 intent_node 在调用 Gatekeeper 之前处理，
+        此处不再重复判断。
         """
         query_stripped = query.strip()
 
-        # 明显的问候/闲聊（无需 LLM，直接返回）
-        chitchat_patterns = [
-            r"^(你好|您好|hi|hello|嗨|喂|在吗|在不在|有人在吗)[\s!！。.,，]*$",
-            r"^(谢谢|感谢|多谢|thanks|thank you|3q)[\s!！。.,，]*$",
-            r"^(早上好|下午好|晚上好|早安|晚安|中午好)[\s!！。.,，]*$",
-            r"^(好的|ok|OK|嗯|哦|知道了|明白了)[\s!！。.,，]*$",
-        ]
-        for pattern in chitchat_patterns:
-            if re.search(pattern, query_stripped, re.IGNORECASE):
-                logger.info(f"快速预判 — 闲聊（匹配问候模式）")
-                return IntentResult(intent="chitchat", confidence=0.95)
-
         # 对话回忆类问题 — 用户回忆自己之前分享的个人/医疗信息
-        # 这些绝对不是攻击，安全地跳过 LLM 分类，直接归为 drug_inquiry
         recall_patterns = [
-            # "我之前说/提到/问过 XXX 信息/过敏/病史" → 用户在回忆对话内容
-            r"我(刚才|之前|前面|上次)(说|提到|问|讲)(的|过)?.*(信息|过敏|病史|情况|内容|话|药)",
-            # "我的过敏/病史/用药是什么/有哪些"
-            r"(我的|我个人)(过敏|病史|用药|病历|健康|身体|信息).*(是什么|有什么|多少|哪些|还记得|吗)",
-            # "复述一下我的/我刚才的..."
-            r"复述.*(我的|我刚才|我之前)",
-            # "还记得/记不记得我的..."
-            r"(还记得|记不记得|记得吗).*(我的|我说|我提到|我的过敏|我的病史)",
-            # "告诉我/说说 我的/我说过的..."
-            r"(告诉我|说说|讲一下).*(我的|我说过|我提到过).*(信息|过敏|病史|情况)",
+            r"我(刚才|之前|前面|上次)(说|提到|问|讲)(的|过)?.*(信息|过敏|病史|情况|内容|话|药|病例)",
+            r"(我的|我个人)(过敏|病史|用药|病历|健康|身体|信息|病例).*(是什么|有什么|多少|哪些|还记得|吗)",
+            r"复述.*(我的|我刚才|我之前|我的病例)",
+            r"(还记得|记不记得|记得吗).*(我的|我说|我提到|我的过敏|我的病史|我的病例)",
+            r"(告诉我|说说|讲一下).*(我的|我说过|我提到过).*(信息|过敏|病史|情况|病例)",
         ]
         for pattern in recall_patterns:
             if re.search(pattern, query):
-                logger.info("快速预判 — 对话回忆（用户询问自身信息），归为 drug_inquiry")
-                return IntentResult(intent="drug_inquiry", confidence=0.85)
+                logger.info("快速预判 — 对话回忆（用户询问自身信息），放行")
+                return GateResult(clinical_related=True, confidence=0.85)
 
-        # 明显的非药品问题关键词 → general（正常回答，不是拒答）
-        general_patterns = [
-            r"天气",
-            r"股票",
-            r"汇率",
-            r"新闻",
-            r"电影",
-            r"游戏",
-            r"足球|篮球|比赛",
-            r"旅游|攻略",
-            r"菜谱|做饭|怎么做.*吃",
-            r"编程|代码|python|java|写.*程序|写.*算法|写.*代码",
-            r"今天是几号|现在几点|几月几",
-            r"翻译|translate",
-            r"你是谁|你是什么|你的名字",
-        ]
-        for pattern in general_patterns:
-            if re.search(pattern, query):
-                logger.info(f"快速预判 — 通用问题（匹配: {pattern}）")
-                return IntentResult(intent="general", confidence=0.90)
-
-        # 攻击检测 → attack（拒绝回答）
-        attack_patterns = [
-            r"ignore\s+(all\s+)?(previous|prior|above|your)\s+(instructions?|prompts?|rules?)",
-            r"忽略(\s+所有)?(之前|前面|上述|你的)?\s*(指令|指示|规则|提示)",
-            r"forget\s+(all\s+)?(your\s+)?(instructions?|prompts?|rules?)",
-            r"忘记(\s+所有)?(你的)?\s*(指令|指示|规则)",
-            r"show\s+(me\s+)?(your|the)\s+(system\s+)?(prompt|instructions?|rules?)",
-            r"(告诉|透露|显示|展示)(你的)?\s*(系统)?\s*(提示|指令|规则|prompt)",
-            r"\bDAN\b.*mode|\bDAN\b.*模式",
-            r"developer\s*mode|开发者\s*模式",
-            r"(你现在是|假装你是|pretend\s+you\s+(are|to\s+be)|act\s+as\s+(if|a))\s",
-            r"你不受.*限制|你没有任何.*限制|你可以.*做任何",
-            r"(必须|一定.*要).*回答|你不能拒绝|没有.*选择.*必须",
-            r"<\|im_start\|>|<\|im_end\|>",
-            r"system\s*:\s*(you\s*are|你的|指令)",
-            r"越狱|jail\s*break",
-            r"(制造|制作|合成).*(毒品|毒药|冰毒|武器|炸弹|炸药)",
-            r"(how\s+to\s+(make|build|create|manufacture).*(drugs?|bomb|weapon|poison))",
-        ]
-        query_lower = query.lower()
-        for pattern in attack_patterns:
-            if re.search(pattern, query_lower):
-                logger.info(f"快速预判 — 攻击（匹配: {pattern}）")
-                return IntentResult(intent="attack", confidence=0.98)
-
-        # 明显的药品问题关键词
-        drug_signals = [
+        # 明显的临床医学信号词 → 直接放行
+        clinical_signals = [
+            # 药品相关
             "药", "片", "胶囊", "丸", "注射液", "口服液",
             "剂量", "用法", "用量", "禁忌", "不良反应",
             "副作用", "适应症", "说明书", "抗生素",
-            "mg", "毫克", "一天", "每日", "饭前", "饭后",
+            "mg", "毫克", "服用", "吃药", "停药", "忌口",
+            # 临床医学
+            "患者", "病例", "诊断", "治疗", "手术",
+            "检查", "CT", "MRI", "X线", "超声", "心电图",
+            "血压", "血糖", "体温", "心率", "呼吸",
+            "主诉", "现病史", "既往史", "体格检查",
+            "化验", "实验室", "影像学", "病理",
+            "症状", "体征", "综合征", "并发症",
+            "指南", "循证", "临床路径", "诊疗",
+            "出院", "入院", "转科", "会诊",
+            "高血压", "糖尿病", "冠心病", "心衰",
+            "肺炎", "肝炎", "肾炎", "贫血",
             "布洛芬", "阿司匹林", "对乙酰", "头孢", "阿莫西林",
-            "服用", "吃药", "停药", "忌口", "过敏",
         ]
-        has_drug_signal = any(s in query for s in drug_signals)
+        if any(s in query for s in clinical_signals):
+            return None  # 有信号词，走 LLM 精确判断
 
-        if has_drug_signal:
-            return None  # 有药品信号词，走 LLM 精确分类
-
-        # 有问号但没有药品信号词 → 可能模糊，走 LLM
+        # 有问号但没有信号词 → 可能模糊，走 LLM
         if "?" in query or "？" in query or "吗" in query:
             return None
 
-        # 其他情况：极短文本、无明显信息 → 默认药品问题（宽容策略）
+        # 其他情况：极短文本、无明显信息 → 走 LLM
         return None
 
     def _build_messages(self, query: str) -> list[dict]:
-        """构造意图识别的 messages"""
-        messages = [{"role": "system", "content": _INTENT_SYSTEM}]
+        """构造门禁判断的 messages"""
+        messages = [{"role": "system", "content": _GATEKEEPER_SYSTEM}]
 
         # 加入 few-shot 示例
-        for example in _INTENT_FEW_SHOT:
+        for example in _GATEKEEPER_FEW_SHOT:
             messages.append({"role": "user", "content": example["question"]})
             messages.append({"role": "assistant", "content": example["answer"]})
 
@@ -248,7 +234,7 @@ class IntentClassifier:
             temperature=self._temperature,
             max_tokens=self._max_tokens,
             api_key=self._api_key,
-            result_format="message",  # 使用 chat 格式返回 choices
+            result_format="message",
         )
 
         if response.status_code != 200:
@@ -258,7 +244,6 @@ class IntentClassifier:
             )
 
         output = response.output
-        # DashScope 新版本可能返回 choices 或 text 两种格式
         if output.choices:
             return output.choices[0].message.content
         elif output.text:
@@ -266,10 +251,10 @@ class IntentClassifier:
         else:
             raise RuntimeError("DashScope API 返回了空的 choices 和 text")
 
-    def _parse_response(self, text: str) -> IntentResult:
+    def _parse_response(self, text: str) -> GateResult:
         """解析 LLM 返回的 JSON"""
         if not text:
-            return IntentResult(intent="drug_inquiry", confidence=0.5)
+            return GateResult(clinical_related=True, confidence=0.5)
 
         text = text.strip()
 
@@ -280,24 +265,28 @@ class IntentClassifier:
 
         try:
             data = json.loads(text)
-            intent = data.get("intent", "other")
+            # 兼容新旧两种字段名
+            clinical_related = data.get(
+                "clinical_related",
+                data.get("drug_related", True)
+            )
             confidence = float(data.get("confidence", 0.5))
 
-            # 校验
-            if intent not in ("drug_inquiry", "chitchat", "general", "attack"):
-                intent = "drug_inquiry"  # 兜底宽容
+            # 确保 clinical_related 是 bool
+            if not isinstance(clinical_related, bool):
+                clinical_related = True  # 兜底放行
 
             # 钳制置信度到 [0, 1]
             confidence = max(0.0, min(1.0, confidence))
 
-            return IntentResult(intent=intent, confidence=confidence)
+            return GateResult(clinical_related=clinical_related, confidence=confidence)
 
         except (json.JSONDecodeError, ValueError, TypeError) as e:
-            logger.warning(f"意图识别 JSON 解析失败: {e}，原始文本: {text[:200]}")
-            # 启发式回退：如果文本中包含 drug_inquiry 字样
-            if "drug_inquiry" in text.lower():
-                return IntentResult(intent="drug_inquiry", confidence=0.7)
-            return IntentResult(intent="drug_inquiry", confidence=0.5)
+            logger.warning(f"门禁 JSON 解析失败: {e}，原始文本: {text[:200]}")
+            # 启发式回退
+            if "true" in text.lower():
+                return GateResult(clinical_related=True, confidence=0.7)
+            return GateResult(clinical_related=True, confidence=0.5)
 
 
 # ============================================================
@@ -306,16 +295,16 @@ class IntentClassifier:
 def classify_intent(
     query: str,
     api_key: str | None = None,
-) -> IntentResult:
+) -> GateResult:
     """
-    便捷函数：一行调用完成意图分类。
+    便捷函数：一行调用完成门禁判断。
 
     Args:
         query: 用户问题
         api_key: API Key（可选）
 
     Returns:
-        IntentResult
+        GateResult
     """
-    classifier = IntentClassifier(api_key=api_key)
-    return classifier.classify(query)
+    gk = Gatekeeper(api_key=api_key)
+    return gk.classify(query)

@@ -3,17 +3,17 @@
 在线流程模块
 
 提供 RAG 问答系统的在线检索与生成能力：
-1. intent     — 意图识别（判断用户问题是否药品相关）
+1. intent     — 门禁判断（二元：药品相关 / 非药品相关）
 2. retriever  — 混合检索（向量 + BM25 → RRF 融合）
 3. ranker     — 重排序（DashScope qwen3-rerank 二次排序）
 4. generator  — 答案生成（基于检索结果 + 场景化提示词模板）
 
 使用方式:
-    from app.online import IntentClassifier, Retriever, Ranker, Generator
+    from app.online import Gatekeeper, Retriever, Ranker, Generator
 
-    # 意图识别
-    classifier = IntentClassifier()
-    intent = classifier.classify("阿司匹林一天吃几次？")
+    # 门禁判断
+    gk = Gatekeeper()
+    result = gk.classify("阿司匹林一天吃几次？")
 
     # 混合检索
     retriever = Retriever()
@@ -29,15 +29,16 @@
 """
 
 from app.online.generator import GeneratedAnswer, Generator, generate_answer
-from app.online.intent import IntentClassifier, IntentResult, classify_intent
+from app.online.intent import GateResult, Gatekeeper, classify_intent, is_greeting
 from app.online.ranker import RankedDocument, Ranker, rerank_documents
 from app.online.retriever import Retriever, SearchResult
 
 __all__ = [
-    # intent
-    "IntentClassifier",
-    "IntentResult",
+    # gatekeeper
+    "Gatekeeper",
+    "GateResult",
     "classify_intent",
+    "is_greeting",
     # retriever
     "Retriever",
     "SearchResult",
