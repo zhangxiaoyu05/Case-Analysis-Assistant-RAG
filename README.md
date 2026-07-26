@@ -10,7 +10,7 @@
 ┌──────────────────────────────────────────────────────────┐
 │                    前端（四界面）                          │
 │   Web 原生界面（index.html / login.html / manage.html / profile.html）│
-│   支持文件拖拽上传 + 分析模式选择 + SOAP 结果渲染          │
+│   文件拖拽上传 + 分析模式选择 + AI 病例提取面板 + SOAP 结果渲染   │
 └───────────────────────┬──────────────────────────────────┘
                         │ HTTP / SSE (multipart/form-data)
 ┌───────────────────────▼──────────────────────────────────┐
@@ -267,7 +267,7 @@ pytest tests/ --cov=app   # 含覆盖率报告
 ├── config/
 │   ├── config.yaml             # 业务参数
 │   └── prompts.yaml            # 提示词模板（gatekeeper + case_extraction + 5 SOAP 模板）
-├── frontend/                   # Web 前端（4 页面：index/login/manage/profile）
+├── frontend/                   # Web 前端（4 页面：病例分析/登录/知识库管理/执业画像）
 ├── scripts/                    # 工具脚本（含 migration_v3.sql 数据库增量迁移）
 └── tests/                      # 测试（407 tests，全部通过）
 ```

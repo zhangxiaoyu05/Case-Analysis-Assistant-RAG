@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <meta name="api-key" content="__API_KEY_PLACEHOLDER__">
-<title>知识库管理 — RAG Pharma</title>
+<title>知识库管理 — 临床病例分析助手</title>
 <style>
 /* ============================================================
    CSS Variables — Botanical warm theme (shared with index.html)
@@ -168,6 +168,33 @@ input[type="file"] { display: none; }
 
 .empty-hint { text-align: center; padding: 32px 20px; color: var(--text-muted); font-size: 13px; }
 
+/* Search */
+.search-box {
+  display: flex; gap: 8px; margin-bottom: 12px;
+}
+.search-box input {
+  flex: 1; padding: 8px 12px; border: 1px solid var(--border);
+  border-radius: 8px; font-size: 13px; font-family: inherit; outline: none;
+  transition: .15s;
+}
+.search-box input:focus { border-color: var(--primary); box-shadow: 0 0 0 3px rgba(13,148,136,.08); }
+.search-box button {
+  padding: 8px 14px; border-radius: 8px; border: 1px solid var(--border);
+  background: var(--card); cursor: pointer; font-size: 13px; font-family: inherit;
+  color: var(--text-secondary); transition: .15s;
+}
+.search-box button:hover { background: var(--primary-light); color: var(--primary); border-color: var(--primary); }
+
+/* Source-specific metadata */
+.src-meta-item {
+  display: inline-block; padding: 2px 6px; margin-right: 4px;
+  border-radius: 4px; font-size: 10px; font-weight: 500;
+}
+.src-meta-drug { background: #dbeafe; color: #1e40af; }
+.src-meta-disease { background: #fce7f3; color: #9d174d; }
+.src-meta-guideline { background: #d1fae5; color: #065f46; }
+.src-meta-literature { background: #fef3c7; color: #92400e; }
+
 /* ============================================================
    Toasts
    ============================================================ */
@@ -253,7 +280,7 @@ input[type="file"] { display: none; }
     <div class="form-row" style="display:flex;gap:12px;margin-bottom:12px">
       <div class="form-group" style="flex:2;margin-bottom:0">
         <label>来源类型</label>
-        <select id="sourceTypeSelect" style="width:100%;padding:9px 12px;border:1px solid var(--border);border-radius:8px;font-size:13px;font-family:inherit;outline:none;background:#fff">
+        <select id="sourceTypeSelect" style="width:100%;padding:9px 12px;border:1px solid var(--border);border-radius:8px;font-size:13px;font-family:inherit;outline:none;background:#fff" onchange="onSourceTypeChange()">
           <option value="drug">💊 药品说明书</option>
           <option value="disease">🦠 疾病知识</option>
           <option value="guideline">📋 临床指南</option>
@@ -261,8 +288,8 @@ input[type="file"] { display: none; }
         </select>
       </div>
       <div class="form-group" style="flex:3;margin-bottom:0">
-        <label>名称（选填）</label>
-        <input type="text" id="drugNameInput" placeholder="留空则从文件名自动推断...">
+        <label id="extraFieldLabel">药品名称（选填）</label>
+        <input type="text" id="extraFieldInput" placeholder="留空则从文件名自动推断...">
       </div>
     </div>
     <div class="form-group">
@@ -288,6 +315,11 @@ input[type="file"] { display: none; }
       <button class="source-tab" data-source="disease" onclick="switchSourceTab('disease')">🦠 疾病</button>
       <button class="source-tab" data-source="guideline" onclick="switchSourceTab('guideline')">📋 指南</button>
       <button class="source-tab" data-source="literature" onclick="switchSourceTab('literature')">📄 文献</button>
+    </div>
+    <!-- Search -->
+    <div class="search-box">
+      <input type="text" id="searchInput" placeholder="搜索知识库条目..." oninput="onSearchInput()">
+      <button onclick="clearSearch()">✕ 清除</button>
     </div>
     <div class="drug-list" id="sourceList">
       <div class="empty-hint">加载中...</div>
@@ -322,6 +354,8 @@ if (API_KEY) {
 
 const API = '/api/v1';
 let currentSource = 'drug';
+let allSourceData = {}; // Cache all source data for client-side search
+let currentSearchQuery = '';
 
 // ============================================================
 // Init
@@ -330,6 +364,7 @@ document.addEventListener('DOMContentLoaded', () => {
   checkHealth();
   refreshSources();
   setupDragDrop();
+  onSourceTypeChange(); // Set initial field labels
 });
 
 // ============================================================
@@ -380,6 +415,54 @@ function setupDragDrop() {
 }
 
 // ============================================================
+// Dynamic source type fields
+// ============================================================
+function onSourceTypeChange() {
+  const sourceType = document.getElementById('sourceTypeSelect').value;
+  const label = document.getElementById('extraFieldLabel');
+  const input = document.getElementById('extraFieldInput');
+
+  const config = {
+    drug:       { label: '药品名称（选填）', placeholder: '留空则从文件名自动推断...' },
+    disease:    { label: '疾病名称（选填）', placeholder: '例如：2型糖尿病、心力衰竭...' },
+    guideline:  { label: '指南标题（选填）', placeholder: '例如：中国心力衰竭诊疗指南2024...' },
+    literature: { label: '文献标题（选填）', placeholder: '例如：Efficacy of SGLT2i in HFrEF...' },
+  };
+
+  const cfg = config[sourceType] || config.drug;
+  label.textContent = cfg.label;
+  input.placeholder = cfg.placeholder;
+}
+
+// ============================================================
+// Search
+// ============================================================
+function onSearchInput() {
+  currentSearchQuery = document.getElementById('searchInput').value.trim().toLowerCase();
+  filterAndRender();
+}
+
+function clearSearch() {
+  document.getElementById('searchInput').value = '';
+  currentSearchQuery = '';
+  filterAndRender();
+}
+
+function filterAndRender() {
+  const items = (allSourceData[currentSource] || []);
+  if (!currentSearchQuery) {
+    renderSourceItems(document.getElementById('sourceList'), items, currentSource);
+    return;
+  }
+  const filtered = items.filter(item => {
+    const title = (item.title || item.drug_name || '').toLowerCase();
+    const meta = (item.category || item.study_type || item.issuing_body || item.disease_name || '').toLowerCase();
+    return title.includes(currentSearchQuery) || meta.includes(currentSearchQuery);
+  });
+  renderSourceItems(document.getElementById('sourceList'), filtered, currentSource);
+}
+
+// ============================================================
 // Upload
 // ============================================================
 async function uploadDocument() {
@@ -395,9 +478,14 @@ async function uploadDocument() {
 
   const form = new FormData();
   form.append('file', file);
-  const drugName = document.getElementById('drugNameInput').value.trim();
+  const extraName = document.getElementById('extraFieldInput').value.trim();
   const sourceType = document.getElementById('sourceTypeSelect').value;
-  if (drugName) form.append('drug_name', drugName);
+  if (extraName) {
+    // Map source_type to the appropriate field name
+    const fieldMap = { drug: 'drug_name', disease: 'disease_name', guideline: 'guideline_title', literature: 'title' };
+    const fieldName = fieldMap[sourceType] || 'drug_name';
+    form.append(fieldName, extraName);
+  }
   form.append('source_type', sourceType);
   form.append('desensitize', document.getElementById('desensitizeCheck').checked);
 
@@ -411,7 +499,7 @@ async function uploadDocument() {
     checkHealth();
     fileInput.value = '';
     document.getElementById('fileName').textContent = '';
-    document.getElementById('drugNameInput').value = '';
+    document.getElementById('extraFieldInput').value = '';
   } catch (e) {
     status.innerHTML = `<span style="color:#ef4444">❌ ${e.message}</span>`;
     showToast('入库失败: ' + e.message, 'error');
@@ -441,7 +529,7 @@ async function refreshSources() {
   const sourceType = currentSource;
 
   try {
-    // Try the multi-source endpoint, fall back to drug-only if 404
+    // Try the multi-source endpoint
     let data;
     try {
       const r = await fetch(`${API}/knowledge/sources`);
@@ -454,11 +542,14 @@ async function refreshSources() {
           for (const [st, cnt] of Object.entries(data.counts)) {
             parts.push(`${labels[st] || st}: ${cnt}`);
           }
-          countEl.textContent = parts.join(' · ');
+          countEl.textContent = parts.join(' · ') || '暂无数据';
         }
-        // Show items for current source
-        const items = data.items && data.items[sourceType] ? data.items[sourceType] : [];
-        renderSourceItems(container, items, sourceType);
+        // Cache all source data for search
+        if (data.items) {
+          allSourceData = data.items;
+        }
+        // Show items for current source with search filter
+        filterAndRender();
         return;
       }
     } catch (e) {
@@ -473,7 +564,8 @@ async function refreshSources() {
     const items = d.drugs.map(dr => ({
       id: dr.id, title: dr.drug_name, chunk_count: dr.chunk_count, category: dr.category
     }));
-    renderSourceItems(container, items, 'drug');
+    allSourceData = { drug: items };
+    filterAndRender();
   } catch (e) {
     container.innerHTML = '<div class="empty-hint" style="color:#ef4444">加载失败，请检查服务状态</div>';
   }
@@ -481,19 +573,46 @@ async function refreshSources() {
 
 function renderSourceItems(container, items, sourceType) {
   if (!items.length) {
-    const labels = { drug: '药品', disease: '疾病知识', guideline: '临床指南', literature: '学术文献' };
-    container.innerHTML = `<div class="empty-hint">暂无已入库${labels[sourceType] || '文档'}，请上传文档</div>`;
+    const labels = { drug: '药品说明书', disease: '疾病知识', guideline: '临床指南', literature: '学术文献' };
+    const hint = currentSearchQuery
+      ? `没有匹配 "${currentSearchQuery}" 的${labels[sourceType] || '文档'}`
+      : `暂无已入库${labels[sourceType] || '文档'}，请上传文档`;
+    container.innerHTML = `<div class="empty-hint">${hint}</div>`;
     return;
   }
+
+  const metaHtml = (item, st) => {
+    const parts = [];
+    const chunkInfo = `${item.chunk_count || 0} chunks`;
+    parts.push(chunkInfo);
+    if (st === 'drug' && item.category) {
+      parts.push(`<span class="src-meta-item src-meta-drug">${escHtml(item.category)}</span>`);
+    }
+    if (st === 'disease') {
+      if (item.disease_category) parts.push(`<span class="src-meta-item src-meta-disease">${escHtml(item.disease_category)}</span>`);
+      if (item.department) parts.push(`科室: ${escHtml(item.department)}`);
+    }
+    if (st === 'guideline') {
+      if (item.issuing_body) parts.push(`<span class="src-meta-item src-meta-guideline">${escHtml(item.issuing_body)}</span>`);
+      if (item.publish_year) parts.push(`📅 ${item.publish_year}`);
+    }
+    if (st === 'literature') {
+      if (item.study_type) parts.push(`<span class="src-meta-item src-meta-literature">${escHtml(item.study_type)}</span>`);
+      if (item.journal) parts.push(`📰 ${escHtml(item.journal)}`);
+      if (item.publish_year) parts.push(`📅 ${item.publish_year}`);
+    }
+    return parts.join(' · ');
+  };
+
   container.innerHTML = items.map(dr => `
     <div class="drug-item">
       <div>
-        <div class="name">${escHtml(dr.title || dr.drug_name || '未命名')}</div>
-        <div class="meta">${escHtml(dr.category || dr.study_type || dr.issuing_body || '')} · ${dr.chunk_count || 0} chunks</div>
+        <div class="name">${escHtml(dr.title || dr.drug_name || dr.disease_name || dr.guideline_title || '未命名')}</div>
+        <div class="meta">${metaHtml(dr, sourceType)}</div>
       </div>
       <div class="right">
         <span class="drug-count">${dr.chunk_count || 0}</span>
-        <button class="btn-danger-sm" onclick="deleteSourceItem('${sourceType}',${dr.id},'${escHtml(dr.title || dr.drug_name || '')}')" title="删除">×</button>
+        <button class="btn-danger-sm" onclick="deleteSourceItem('${sourceType}',${dr.id},'${escHtml(dr.title || dr.drug_name || dr.disease_name || dr.guideline_title || '')}')" title="删除">×</button>
       </div>
     </div>`).join('');
 }

@@ -2,14 +2,14 @@
 
 > 本文件用于记录每一步操作，便于在新对话窗口中快速恢复上下文。
 > 每次操作后需同步更新此文件。
-> v1.0.0 Phase 1 完成时间：2026-07-25 | Phase 2 完成时间：2026-07-26 | Phase 3 完成时间：2026-07-26 | 当前测试数：407 ✅
+> v1.0.0 Phase 1 完成时间：2026-07-25 | Phase 2 完成时间：2026-07-26 | Phase 3 完成时间：2026-07-26 | Phase 4 完成时间：2026-07-26 | 当前测试数：407 ✅
 
 ---
 
 ## 📌 项目概述
 
 - **项目名称**: RAG 临床病例分析助手（原 RAG 药品问答系统）
-- **当前版本**: v1.0.0-Phase3
+- **当前版本**: v1.0.0（Phase 4 完成）
 - **项目路径**: `D:\RAG_project\`
 - **技术栈**: LangChain + LangGraph + Milvus + MySQL + Redis + Docker
 - **模型提供商**: 通义千问（DASHSCOPE_API_KEY）
@@ -1001,7 +1001,7 @@ pytest tests/ --cov=app       # 含覆盖率报告（需 pytest-cov）
 - Swagger 文档: `http://localhost:8000/docs`
 
 
-## ✅ 项目状态：Phase 1 完成 + Phase 2 完成 + Phase 3 完成（51/51 步骤）
+## ✅ 项目状态：Phase 1 完成 + Phase 2 完成 + Phase 3 完成 + Phase 4 完成（52/52 步骤）
 
 | 模块 | 完成步骤 | 状态 |
 |------|----------|------|
@@ -1022,7 +1022,7 @@ pytest tests/ --cov=app       # 含覆盖率报告（需 pytest-cov）
 | 知识库管理 API | 步骤 29, 34 | ✅ |
 | 测试 (407 用例) | 步骤 27, 33, 35, 37, 38, 39, 40, **47**, **49** | ✅ |
 | 测试数据 (20 药品) | 步骤 28 | ✅ |
-| 前端 Web 界面 | 步骤 30, 35, 36, 39, **49** + 优化 F | ✅ |
+| 前端 Web 界面 | 步骤 30, 35, 36, 39, **49**, **52** + 优化 F | ✅ |
 
 ---
 
@@ -2096,7 +2096,7 @@ if history and key == "dosage_followup":  # ← 条件过窄
 | 2026-07-25 | 步骤 48 | **Phase 2.3-2.6 — 数据库层扩展**：创建 `migration_v3.sql`（6 张新表 DDL + index_records 扩展）；`milvus_client.py` 支持多 collection（统一 schema 含 source_name/source_type/extra_field_1/extra_field_2）+ 向后兼容旧 drug_chunks；`mysql_client.py` 新增通用 CRUD 方法（generic 系列）；`init_milvus.py`/`init_collection.py` 支持 4 collection + 9 表。|
 | 2026-07-25 | 步骤 49 | **Phase 2.10-2.16 — Pipeline + 检索 + 前端 + CLI 多源扩展**：pipeline.py source_type 路由（4 种切分器 → 4 种表/collection）；retriever.py 新增 `retrieve_from` + `multi_source_retrieve`（4 collection 并行 + 跨源 RRF + 均衡采样）；nodes.py `multi_retrieve_node` 切换到真正多源；manage.html 多源 Tab + source_type 下拉 + 徽标；run_offline.py --source-type 参数。407 测试全通过。|
 | 2026-07-26 | 步骤 50 | **Phase 2 完成度验证 + Bug 修复**：逐一核对 Phase 2 全部 16 个子步骤（2.1-2.16）——MySQL 6 张新表 + Milvus 4 Collection 统一 schema + 3 种新切分器 + Pipeline source_type 路由 + 多源并行检索 + CLI/前端适配，全部完成。发现并修复 3 个 Bug：(1) `config.py` 5 个 multi_source 属性路径从 `database.milvus.multi_source.xxx` 修正为 `database.multi_source.xxx`（原路径指向不存在节点，配置从未生效）；(2) `nodes.py` `multi_retrieve_node` 硬编码 `top_n_per_source=3, final_top_n=10` 改为读取 `config.multi_source_top_n_per_source/final_top_n`；(3) `mysql_client.py` 移除 `bm25_search` 和 `bm25_search_generic` 中声明但未使用的 `query_escaped` 死代码。README.md 同步更新（测试数 407 + 项目结构补全 9 个新文件 + API 表补全 + 离线流程多源化）。407 测试全通过，零回归。|
-| 2026-07-26 | 步骤 51 | **Phase 3 — 记忆体系重构（患者→医生维度）**：将记忆系统和用户画像从患者维度改造为医生维度。**user_memory_manager.py**：`_EXTRACT_SYSTEM_PROMPT` 重写（提取医生临床关注点/疑难点/诊疗偏好/计划/执业特征）；memory_type 枚举 5 项全部重命名（`drug_interest`→`clinical_interest`、`concern`→`clinical_concern`、`preference`→`clinical_preference`、`plan`→`clinical_plan`、`fact`→`clinical_fact`）；`_format_memories_text` type_labels 和标题更新（"用户偏好/关注点"→"医生临床特征"）。**user_profile_manager.py**：`_EXTRACT_SYSTEM_PROMPT` 重写（提取医生执业信息）；`_VALID_FIELDS` 从 9 个患者字段改为 9 个医生字段（name/title/department/hospital/specialty/license_years/guideline_preference/patient_population/common_diseases）；`_FIELD_LABELS` 更新；`_format_profile_text` 标题更新（"用户个人信息"→"医生执业信息"）。**frontend/profile.html**：页面标题和卡片描述更新。**测试**：51 个记忆/画像测试全部更新匹配新枚举值/字段名。407 全量测试零回归。|
+| 2026-07-26 | 步骤 52 | **Phase 4 — 前端完善 + 全量测试 + 文档**：**4.1** `frontend/index.html` — 新增 AI 病例提取面板（SSE case_profile 事件接收 + renderCaseProfile 渲染，支持主诉/现病史/既往史/体格检查/疑似诊断/关键异常/当前用药/辅助检查 8 个字段，可折叠）；来源按类型 icon 分组 + 证据级别徽标（已有基础上优化 CSS）；流式渲染优化（修复 SSE 事件解析：event: 行正确切换 currentEvent）。**4.2** `frontend/manage.html` — 搜索过滤功能（客户端实时过滤 allSourceData）；动态表单（source_type 切换时更新字段标签和 placeholder + 上传时映射到对应 API 参数名）；来源特定元数据显示（药品分类/疾病分类+科室/指南发布机构+年份/文献研究类型+期刊+年份）；来源计数显示。**4.3** `frontend/login.html` — 品牌文案更新（Logo 💊→🏥、标题"RAG 药品知识问答"→"临床病例分析助手"、副标题"智能药品说明书问答系统"→"AI 驱动的 SOAP 格式临床病例智能分析"）。**4.4** `tests/` — 全量回归测试，407 tests 全部通过，零回归。**4.5** `README.md` — 前端描述更新（新增"AI 病例提取面板"）、项目结构注释更新。**4.6** `pyproject.toml` — 包名 raq-pharma→case-analysis-raq、描述扩展、keywords 更新（新增 langgraph/clinical/case-analysis/soap/evidence-based/llm）。**4.7** `progress.md` — 本条目。**后端改动**：`app/api/routers/chat.py` 流式端点新增 case_profile SSE 事件发送。：将记忆系统和用户画像从患者维度改造为医生维度。**user_memory_manager.py**：`_EXTRACT_SYSTEM_PROMPT` 重写（提取医生临床关注点/疑难点/诊疗偏好/计划/执业特征）；memory_type 枚举 5 项全部重命名（`drug_interest`→`clinical_interest`、`concern`→`clinical_concern`、`preference`→`clinical_preference`、`plan`→`clinical_plan`、`fact`→`clinical_fact`）；`_format_memories_text` type_labels 和标题更新（"用户偏好/关注点"→"医生临床特征"）。**user_profile_manager.py**：`_EXTRACT_SYSTEM_PROMPT` 重写（提取医生执业信息）；`_VALID_FIELDS` 从 9 个患者字段改为 9 个医生字段（name/title/department/hospital/specialty/license_years/guideline_preference/patient_population/common_diseases）；`_FIELD_LABELS` 更新；`_format_profile_text` 标题更新（"用户个人信息"→"医生执业信息"）。**frontend/profile.html**：页面标题和卡片描述更新。**测试**：51 个记忆/画像测试全部更新匹配新枚举值/字段名。407 全量测试零回归。|
 
 ---
 
@@ -2107,4 +2107,4 @@ if history and key == "dosage_followup":  # ← 条件过窄
 | Phase 1 | 核心流程改造（8 节点 graph + 文件上传 + SOAP 模板） | ✅ |
 | Phase 2 | 多源知识库（4 Collection + 4 切分器 + 多路检索） | ✅ |
 | Phase 3 | 记忆体系重构（患者→医生维度） | ✅ |
-| Phase 4 | 前端完善 + 全量测试 + 文档 | ❌ 待实施 |
+| Phase 4 | 前端完善 + 全量测试 + 文档 | ✅ |

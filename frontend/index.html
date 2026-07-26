@@ -506,6 +506,63 @@ body {
   0%, 80%, 100% { transform: scale(.6); opacity: .4; }
   40% { transform: scale(1); opacity: 1; }
 }
+
+/* Case Profile Panel */
+.case-profile-card {
+  margin: 8px 0;
+  border: 1px solid var(--primary-100);
+  border-radius: 10px;
+  background: var(--primary-light);
+  overflow: hidden;
+}
+
+.case-profile-header {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 8px 14px;
+  cursor: pointer;
+  user-select: none;
+  font-size: 12px; font-weight: 600;
+  color: var(--primary-hover);
+}
+
+.case-profile-header:hover { background: var(--primary-100); }
+
+.case-profile-body {
+  padding: 4px 14px 12px;
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 6px 16px;
+}
+
+.case-profile-field {
+  font-size: 11px;
+  line-height: 1.5;
+}
+
+.case-profile-field .cp-label {
+  color: var(--text-muted);
+  font-weight: 500;
+  display: block;
+}
+
+.case-profile-field .cp-value {
+  color: var(--text);
+}
+
+.case-profile-badge {
+  display: inline-block;
+  padding: 1px 5px;
+  margin: 1px 2px 1px 0;
+  border-radius: 3px;
+  font-size: 10px;
+  font-weight: 500;
+  background: #fff;
+  border: 1px solid var(--border);
+}
+
+.cp-badge-abnormal { border-color: #fca5a5; color: #dc2626; background: #fef2f2; }
+.cp-badge-diagnosis { border-color: #fcd34d; color: #b45309; background: #fffbeb; }
+.cp-badge-med { border-color: #93c5fd; color: #1d4ed8; background: #eff6ff; }
 </style>
 </head>
 <body>
@@ -1041,6 +1098,72 @@ function renderMarkdown(text) {
   return html || esc(text);
 }
 
+// Case Profile renderer
+function renderCaseProfile(profile) {
+  if (!profile) return '';
+
+  const sections = [];
+
+  // Chief complaint
+  if (profile.chief_complaint) {
+    sections.push(`<div class="case-profile-field"><span class="cp-label">🏥 主诉</span><span class="cp-value">${escHtml(profile.chief_complaint)}</span></div>`);
+  }
+  // Present illness
+  if (profile.present_illness) {
+    const short = profile.present_illness.length > 100 ? profile.present_illness.substring(0, 100) + '...' : profile.present_illness;
+    sections.push(`<div class="case-profile-field"><span class="cp-label">📋 现病史</span><span class="cp-value">${escHtml(short)}</span></div>`);
+  }
+  // Past history
+  if (profile.past_history) {
+    sections.push(`<div class="case-profile-field"><span class="cp-label">⏳ 既往史</span><span class="cp-value">${escHtml(profile.past_history)}</span></div>`);
+  }
+  // Physical exam
+  if (profile.physical_exam) {
+    const short = profile.physical_exam.length > 100 ? profile.physical_exam.substring(0, 100) + '...' : profile.physical_exam;
+    sections.push(`<div class="case-profile-field"><span class="cp-label">🩺 体格检查</span><span class="cp-value">${escHtml(short)}</span></div>`);
+  }
+  // Suspected diagnosis
+  if (profile.suspected_diagnosis && profile.suspected_diagnosis.length > 0) {
+    const badges = profile.suspected_diagnosis.map(d => `<span class="case-profile-badge cp-badge-diagnosis">${escHtml(d)}</span>`).join('');
+    sections.push(`<div class="case-profile-field"><span class="cp-label">🔬 疑似诊断</span><span class="cp-value">${badges}</span></div>`);
+  }
+  // Key abnormalities
+  if (profile.key_abnormalities && profile.key_abnormalities.length > 0) {
+    const badges = profile.key_abnormalities.map(a => `<span class="case-profile-badge cp-badge-abnormal">⚠ ${escHtml(a)}</span>`).join('');
+    sections.push(`<div class="case-profile-field"><span class="cp-label">⚠️ 关键异常</span><span class="cp-value">${badges}</span></div>`);
+  }
+  // Current medications
+  if (profile.current_medications && profile.current_medications.length > 0) {
+    const meds = profile.current_medications.map(m => {
+      const name = m.name || '';
+      const dose = m.dosage ? ` ${m.dosage}` : '';
+      return `<span class="case-profile-badge cp-badge-med">💊 ${escHtml(name)}${escHtml(dose)}</span>`;
+    }).join('');
+    sections.push(`<div class="case-profile-field"><span class="cp-label">💉 当前用药</span><span class="cp-value">${meds}</span></div>`);
+  }
+  // Lab results
+  if (profile.lab_results && profile.lab_results.length > 0) {
+    const labs = profile.lab_results.slice(0, 4).map(l => {
+      const val = l.value ? `: ${l.value}` : '';
+      return `<span class="case-profile-badge">${escHtml(l.name || '')}${escHtml(val)}</span>`;
+    }).join('');
+    sections.push(`<div class="case-profile-field"><span class="cp-label">🧪 辅助检查</span><span class="cp-value">${labs}</span></div>`);
+  }
+
+  if (sections.length === 0) return '';
+
+  return `
+    <div class="case-profile-card">
+      <div class="case-profile-header" onclick="var b=this.nextElementSibling;b.style.display=b.style.display==='none'?'grid':'none';this.querySelector('.cp-arrow').textContent=b.style.display==='none'?'▶':'▼'">
+        <span>📊 病例分析摘要 <span style="font-weight:400;color:var(--text-muted);font-size:11px">（AI 提取 · 点击展开/折叠）</span></span>
+        <span class="cp-arrow" style="font-size:10px">▼</span>
+      </div>
+      <div class="case-profile-body">
+        ${sections.join('')}
+      </div>
+    </div>`;
+}
+
 function escapeHtml(text) {
   const div = document.createElement('div');
   div.textContent = text;
@@ -1129,6 +1252,10 @@ async function sendMessage() {
     const bubble = realDiv.querySelector('.msg-bubble');
     let fullAnswer = '';
     let sources = null;
+    let caseProfile = null;
+
+    // Event handler state
+    let currentEvent = null;
 
     const reader = res.body.getReader();
     const decoder = new TextDecoder();
@@ -1144,12 +1271,33 @@ async function sendMessage() {
 
       for (const line of lines) {
         if (!line.trim()) continue;
-        if (line.startsWith('event: sources')) continue;
+
+        // Handle SSE event type declarations
+        if (line.startsWith('event: ')) {
+          currentEvent = line.substring(7).trim();
+          continue;
+        }
 
         if (line.startsWith('data: ')) {
+          const dataStr = line.substring(6);
           try {
-            const json = JSON.parse(line.substring(6));
+            const json = JSON.parse(dataStr);
 
+            // Handle case_profile event
+            if (currentEvent === 'case_profile') {
+              caseProfile = json;
+              currentEvent = null;
+              continue;
+            }
+
+            // Handle sources event
+            if (currentEvent === 'sources') {
+              sources = json;
+              currentEvent = null;
+              continue;
+            }
+
+            // Handle inline data events (token/done/error)
             if (json.event === 'token') {
               fullAnswer += json.data;
               bubble.innerHTML = renderMarkdown(fullAnswer);
@@ -1158,13 +1306,23 @@ async function sendMessage() {
               throw new Error(json.data);
             }
           } catch (e) {
-            if (line.includes('"drug_name"') || line.includes('"chunk_text"') || line.includes('"source_type"')) {
+            // Try to parse as sources (backward compat)
+            if ((dataStr.includes('"drug_name"') || dataStr.includes('"chunk_text"') || dataStr.includes('"source_type"')) && !sources) {
               try {
-                sources = JSON.parse(line.substring(6));
+                sources = JSON.parse(dataStr);
               } catch {}
             }
           }
+          currentEvent = null;
         }
+      }
+    }
+
+    // Add case profile card if extracted
+    if (caseProfile && Object.keys(caseProfile).some(k => caseProfile[k])) {
+      const profileHtml = renderCaseProfile(caseProfile);
+      if (profileHtml) {
+        bubble.innerHTML = profileHtml + bubble.innerHTML;
       }
     }
 

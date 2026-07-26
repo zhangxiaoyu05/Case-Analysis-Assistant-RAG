@@ -3,15 +3,15 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [project]
-name = "rag-pharma"
+name = "case-analysis-rag"
 version = "1.0.0"
-description = "RAG 临床病例分析助手 — SOAP 格式 + 循证引用"
+description = "RAG 临床病例分析助手 — 多源知识库 + SOAP 格式输出 + 循证引用（证据级别标注）"
 readme = "README.md"
 license = { text = "MIT" }
 authors = [
-    { name = "RAG Team", email = "team@example.com" }
+    { name = "Clinical AI Team" }
 ]
-keywords = ["rag", "langchain", "milvus", "healthcare", "qa"]
+keywords = ["rag", "langgraph", "milvus", "clinical", "case-analysis", "soap", "evidence-based", "llm", "healthcare"]
 classifiers = [
     "Development Status :: 3 - Alpha",
     "Intended Audience :: Developers",

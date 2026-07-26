@@ -531,6 +531,10 @@ async def chat_stream(
             synth_state = synthesize_node({"ranked_docs": ranked_dicts})
             synthesized_context = synth_state.get("synthesized_context", {})
 
+            # 发送 case_profile（病例提取结果）
+            if case_profile:
+                yield f"event: case_profile\ndata: {json.dumps(case_profile, ensure_ascii=False)}\n\n"
+
             # 发送 sources
             sources_payload = [
                 {
