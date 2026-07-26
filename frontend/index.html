@@ -1106,30 +1106,30 @@ function renderCaseProfile(profile) {
 
   // Chief complaint
   if (profile.chief_complaint) {
-    sections.push(`<div class="case-profile-field"><span class="cp-label">🏥 主诉</span><span class="cp-value">${escHtml(profile.chief_complaint)}</span></div>`);
+    sections.push(`<div class="case-profile-field"><span class="cp-label">🏥 主诉</span><span class="cp-value">${escapeHtml(profile.chief_complaint)}</span></div>`);
   }
   // Present illness
   if (profile.present_illness) {
     const short = profile.present_illness.length > 100 ? profile.present_illness.substring(0, 100) + '...' : profile.present_illness;
-    sections.push(`<div class="case-profile-field"><span class="cp-label">📋 现病史</span><span class="cp-value">${escHtml(short)}</span></div>`);
+    sections.push(`<div class="case-profile-field"><span class="cp-label">📋 现病史</span><span class="cp-value">${escapeHtml(short)}</span></div>`);
   }
   // Past history
   if (profile.past_history) {
-    sections.push(`<div class="case-profile-field"><span class="cp-label">⏳ 既往史</span><span class="cp-value">${escHtml(profile.past_history)}</span></div>`);
+    sections.push(`<div class="case-profile-field"><span class="cp-label">⏳ 既往史</span><span class="cp-value">${escapeHtml(profile.past_history)}</span></div>`);
   }
   // Physical exam
   if (profile.physical_exam) {
     const short = profile.physical_exam.length > 100 ? profile.physical_exam.substring(0, 100) + '...' : profile.physical_exam;
-    sections.push(`<div class="case-profile-field"><span class="cp-label">🩺 体格检查</span><span class="cp-value">${escHtml(short)}</span></div>`);
+    sections.push(`<div class="case-profile-field"><span class="cp-label">🩺 体格检查</span><span class="cp-value">${escapeHtml(short)}</span></div>`);
   }
   // Suspected diagnosis
   if (profile.suspected_diagnosis && profile.suspected_diagnosis.length > 0) {
-    const badges = profile.suspected_diagnosis.map(d => `<span class="case-profile-badge cp-badge-diagnosis">${escHtml(d)}</span>`).join('');
+    const badges = profile.suspected_diagnosis.map(d => `<span class="case-profile-badge cp-badge-diagnosis">${escapeHtml(d)}</span>`).join('');
     sections.push(`<div class="case-profile-field"><span class="cp-label">🔬 疑似诊断</span><span class="cp-value">${badges}</span></div>`);
   }
   // Key abnormalities
   if (profile.key_abnormalities && profile.key_abnormalities.length > 0) {
-    const badges = profile.key_abnormalities.map(a => `<span class="case-profile-badge cp-badge-abnormal">⚠ ${escHtml(a)}</span>`).join('');
+    const badges = profile.key_abnormalities.map(a => `<span class="case-profile-badge cp-badge-abnormal">⚠ ${escapeHtml(a)}</span>`).join('');
     sections.push(`<div class="case-profile-field"><span class="cp-label">⚠️ 关键异常</span><span class="cp-value">${badges}</span></div>`);
   }
   // Current medications
@@ -1137,7 +1137,7 @@ function renderCaseProfile(profile) {
     const meds = profile.current_medications.map(m => {
       const name = m.name || '';
       const dose = m.dosage ? ` ${m.dosage}` : '';
-      return `<span class="case-profile-badge cp-badge-med">💊 ${escHtml(name)}${escHtml(dose)}</span>`;
+      return `<span class="case-profile-badge cp-badge-med">💊 ${escapeHtml(name)}${escapeHtml(dose)}</span>`;
     }).join('');
     sections.push(`<div class="case-profile-field"><span class="cp-label">💉 当前用药</span><span class="cp-value">${meds}</span></div>`);
   }
@@ -1145,7 +1145,7 @@ function renderCaseProfile(profile) {
   if (profile.lab_results && profile.lab_results.length > 0) {
     const labs = profile.lab_results.slice(0, 4).map(l => {
       const val = l.value ? `: ${l.value}` : '';
-      return `<span class="case-profile-badge">${escHtml(l.name || '')}${escHtml(val)}</span>`;
+      return `<span class="case-profile-badge">${escapeHtml(l.name || '')}${escapeHtml(val)}</span>`;
     }).join('');
     sections.push(`<div class="case-profile-field"><span class="cp-label">🧪 辅助检查</span><span class="cp-value">${labs}</span></div>`);
   }
